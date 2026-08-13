@@ -41,6 +41,20 @@ def test_batch_rejects_output_name_collision(tmp_path: Path) -> None:
         plan_batch(tmp_path, tmp_path / "output")
 
 
+def test_batch_detects_supported_inputs_by_content(tmp_path: Path) -> None:
+    (tmp_path / "comic.bin").write_bytes(b"Rar!\x1a\x07\x01\x00payload")
+    (tmp_path / "scan.data").write_bytes(b"%PDF-1.4")
+    (tmp_path / "notes.txt").write_text("não é um quadrinho")
+
+    items = plan_batch(tmp_path, tmp_path / "output")
+
+    assert [(item.source.name, item.phase, item.status) for item in items] == [
+        ("comic.bin", "convert", "planned"),
+        ("notes.txt", "unsupported", "unsupported"),
+        ("scan.data", "convert", "planned"),
+    ]
+
+
 def test_save_report_does_not_overwrite(tmp_path: Path) -> None:
     report = run_batch(tmp_path, tmp_path / "output")
     destination = tmp_path / "report.json"
@@ -75,4 +89,35 @@ def test_batch_executes_items_in_process_pool(tmp_path: Path) -> None:
 
     assert report.workers == 2
     assert [item.status for item in report.items] == ["processed", "processed"]
+    assert [item.metadata.title for item in report.items if item.metadata] == ["issue 1", "issue 2"]
+    assert [item["metadata"]["title"] for item in json.loads(report.to_json())["items"]] == ["issue 1", "issue 2"]
     assert sorted(path.name for path in output.glob("*.cbr")) == ["issue 1.cbr", "issue 2.cbr"]
+
+
+@pytest.mark.skipif(
+    not all(shutil.which(tool) for tool in ("rar", "unrar", "tesseract", "magick")),
+    reason="ferramentas externas não instaladas",
+)
+def test_batch_replaces_existing_output_only_when_requested(tmp_path: Path) -> None:
+    source = tmp_path / "source"
+    source.mkdir()
+    with zipfile.ZipFile(source / "issue.zip", "w") as archive:
+        archive.writestr("001.jpg", b"\xff\xd8\xffpage")
+    output = tmp_path / "output"
+    output.mkdir()
+    existing = output / "issue.cbr"
+    existing.write_bytes(b"old")
+
+    skipped = run_batch(source, output, dry_run=False, lookup_isbn=False, workers=1)
+    replaced = run_batch(
+        source,
+        output,
+        dry_run=False,
+        lookup_isbn=False,
+        workers=1,
+        replace_existing=True,
+    )
+
+    assert skipped.items[0].status == "skipped"
+    assert replaced.items[0].status == "processed"
+    assert existing.read_bytes().startswith(b"Rar!")

@@ -10,10 +10,10 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 
 from banca_revista.archive import ConversionError, natural_key
+from banca_revista.cbr import detect_cbr_source
+from banca_revista.metadata import ComicMetadata
 from banca_revista.pipeline import process_to_library
 
-CONVERT_INPUTS = frozenset({".pdf", ".zip", ".cbz"})
-UNSUPPORTED_INPUTS = frozenset({".epub", ".rar"})
 DEFAULT_WORKERS = 10
 MAX_WORKERS = 64
 
@@ -27,6 +27,7 @@ class BatchItem:
     phase: str
     status: str
     detail: str | None = None
+    metadata: ComicMetadata | None = None
 
 
 @dataclass(frozen=True)
@@ -50,30 +51,27 @@ class BatchReport:
 
 
 def plan_batch(base: Path, output_dir: Path) -> tuple[BatchItem, ...]:
-    """Planeja primeiro conversões e depois todos os CBRs existentes."""
+    """Planeja arquivos suportados pelo conteúdo, sem confiar na extensão."""
     source_dir = base.resolve(strict=True)
     if not source_dir.is_dir():
         raise ConversionError(f"a base não é um diretório: {source_dir}")
     destination_dir = output_dir.resolve()
     files = [path for path in source_dir.iterdir() if path.is_file()]
-    conversions = sorted((path for path in files if path.suffix.casefold() in CONVERT_INPUTS), key=_path_key)
-    comics = sorted((path for path in files if path.suffix.casefold() == ".cbr"), key=_path_key)
-    unsupported = sorted((path for path in files if path.suffix.casefold() in UNSUPPORTED_INPUTS), key=_path_key)
     seen: dict[str, Path] = {}
     items: list[BatchItem] = []
-    for source, phase, status in (
-        *((path, "convert", "planned") for path in conversions),
-        *((path, "process-cbr", "planned") for path in comics),
-        *((path, "unsupported", "unsupported") for path in unsupported),
-    ):
+    for source in sorted(files, key=_path_key):
         output = destination_dir / f"{source.stem}.cbr"
+        try:
+            input_format = detect_cbr_source(source)
+        except (ConversionError, OSError) as error:
+            items.append(BatchItem(source, output, "unsupported", "unsupported", str(error)))
+            continue
+        phase = "process-cbr" if input_format == "rar" and source.suffix.casefold() == ".cbr" else "convert"
         collision_key = output.name.casefold()
-        if status == "planned" and collision_key in seen:
+        if collision_key in seen:
             raise ConversionError(f"duas origens produziriam a mesma saída: {seen[collision_key].name} e {source.name}")
-        if status == "planned":
-            seen[collision_key] = source
-        detail = f"extensão {source.suffix} não é quadrinho suportado" if status == "unsupported" else None
-        items.append(BatchItem(source=source, output=output, phase=phase, status=status, detail=detail))
+        seen[collision_key] = source
+        items.append(BatchItem(source=source, output=output, phase=phase, status="planned"))
     return tuple(items)
 
 
@@ -84,6 +82,7 @@ def run_batch(
     dry_run: bool = True,
     lookup_isbn: bool = True,
     workers: int = DEFAULT_WORKERS,
+    replace_existing: bool = False,
 ) -> BatchReport:
     """Executa cada fase em processos isolados e sem sobrescrever saídas."""
     if not 1 <= workers <= MAX_WORKERS:
@@ -96,50 +95,59 @@ def run_batch(
 
     destination_dir.mkdir(parents=True, exist_ok=True)
     completed: list[BatchItem | None] = [None] * len(planned)
-    pending_by_phase: dict[str, list[tuple[int, BatchItem]]] = {"convert": [], "process-cbr": []}
+    pending: list[tuple[int, BatchItem]] = []
     for index, item in enumerate(planned):
         if item.status == "unsupported":
             completed[index] = item
             continue
-        pending_by_phase[item.phase].append((index, item))
+        pending.append((index, item))
 
     with ProcessPoolExecutor(max_workers=workers) as executor:
-        for phase in ("convert", "process-cbr"):
-            futures = {
-                executor.submit(_process_item, item, lookup_isbn=lookup_isbn): index
-                for index, item in pending_by_phase[phase]
-            }
-            for future in as_completed(futures):
-                index = futures[future]
-                item = planned[index]
-                try:
-                    completed[index] = future.result()
-                except Exception as error:  # pragma: no cover - protege contra falha abrupta do subprocesso
-                    completed[index] = BatchItem(
-                        item.source,
-                        item.output,
-                        item.phase,
-                        "failed",
-                        f"falha inesperada no processo: {type(error).__name__}: {error}",
-                    )
+        futures = {
+            executor.submit(
+                _process_item,
+                item,
+                lookup_isbn=lookup_isbn,
+                replace_existing=replace_existing,
+            ): index
+            for index, item in pending
+        }
+        for future in as_completed(futures):
+            index = futures[future]
+            item = planned[index]
+            try:
+                completed[index] = future.result()
+            except Exception as error:  # pragma: no cover - protege contra falha abrupta do subprocesso
+                completed[index] = BatchItem(
+                    item.source,
+                    item.output,
+                    item.phase,
+                    "failed",
+                    f"falha inesperada no processo: {type(error).__name__}: {error}",
+                )
 
     return BatchReport(
         source_dir, destination_dir, False, workers, tuple(item for item in completed if item is not None)
     )
 
 
-def _process_item(item: BatchItem, *, lookup_isbn: bool) -> BatchItem:
+def _process_item(item: BatchItem, *, lookup_isbn: bool, replace_existing: bool) -> BatchItem:
     """Processa um item em subprocesso sem depender de estado mutável do pai."""
-    if item.output.exists():
+    if item.output.exists() and not replace_existing:
         return BatchItem(item.source, item.output, item.phase, "skipped", "saída já existe")
     try:
-        result = process_to_library(item.source, item.output, lookup_isbn=lookup_isbn)
+        result = process_to_library(
+            item.source,
+            item.output,
+            lookup_isbn=lookup_isbn,
+            replace_existing=replace_existing,
+        )
     except (ConversionError, OSError) as error:
         return BatchItem(item.source, item.output, item.phase, "failed", str(error))
-    detail = f"{result.page_count} páginas; {result.strategy}"
+    detail = f"{result.page_count} páginas; capa: {result.first_page}; {result.strategy}"
     if result.warnings:
         detail = f"{detail}; avisos: {' | '.join(result.warnings)}"
-    return BatchItem(item.source, item.output, item.phase, "processed", detail)
+    return BatchItem(item.source, item.output, item.phase, "processed", detail, result.metadata)
 
 
 def save_report(report: BatchReport, path: Path) -> Path:

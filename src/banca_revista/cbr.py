@@ -341,7 +341,6 @@ def _create_rar(archive: Path, pages: list[Path], metadata: ComicMetadata, *, ra
         "-ma5",
         "-m0",
         "-idq",
-        "-p-",
         "-ep1",
         f"-z{comment}",
         "--",
@@ -355,6 +354,7 @@ def _create_rar(archive: Path, pages: list[Path], metadata: ComicMetadata, *, ra
 
 def _validate_cbr(archive: Path, pages: list[Path], expected_hashes: dict[str, str], *, unrar: str) -> None:
     inspection = inspect_rar(archive, unrar=unrar)
+    _validate_unencrypted(archive, inspection.pages[0].source_name, unrar=unrar)
     expected_names = [page.name for page in pages]
     actual_names = [page.output_name for page in inspection.pages]
     if actual_names != expected_names:
@@ -366,6 +366,20 @@ def _validate_cbr(archive: Path, pages: list[Path], expected_hashes: dict[str, s
                 digest.update(chunk)
         if digest.hexdigest() != expected_hashes[name]:
             raise ConversionError(f"o conteúdo da página mudou durante a criação do CBR: {name}")
+
+
+def _validate_unencrypted(archive: Path, first_page: str, *, unrar: str) -> None:
+    """Confirma que uma senha arbitrária não é necessária para ler a primeira página."""
+    try:
+        result = subprocess.run(
+            [unrar, "p", "-inul", "-p__banca_sem_senha__", "--", os.fspath(archive), first_page],
+            check=False,
+            capture_output=True,
+        )
+    except FileNotFoundError as error:
+        raise ConversionError("o executável unrar não foi encontrado") from error
+    if result.returncode != 0:
+        raise ConversionError("o CBR gerado está protegido por senha")
 
 
 def _validate_destination(destination: Path) -> None:

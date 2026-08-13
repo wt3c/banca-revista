@@ -68,11 +68,28 @@ def build_parser() -> argparse.ArgumentParser:
 
     batch_parser = subcommands.add_parser(
         "batch-to-cbr",
-        help="converte PDF/ZIP/CBZ e processa todos os CBRs de uma pasta",
+        help="detecta PDF/ZIP/RAR pelo conteúdo e publica CBRs normalizados com metadados",
     )
-    batch_parser.add_argument("base", type=Path)
-    batch_parser.add_argument("output_dir", type=Path)
+    batch_parser.add_argument(
+        "base",
+        type=Path,
+        nargs="?",
+        default=Path("/home/boladuz/Downloads/Telegram Desktop"),
+        help="pasta de origem (padrão: /home/boladuz/Downloads/Telegram Desktop)",
+    )
+    batch_parser.add_argument(
+        "output_dir",
+        type=Path,
+        nargs="?",
+        default=Path.home() / "banca",
+        help="biblioteca de destino (padrão: ~/banca)",
+    )
     batch_parser.add_argument("--execute", action="store_true", help="executa o plano; sem esta opção apenas simula")
+    batch_parser.add_argument(
+        "--replace-existing",
+        action="store_true",
+        help="substitui uma saída somente depois que a nova cópia for validada",
+    )
     batch_parser.add_argument("--report", type=Path, help="arquivo JSON do relatório durante a execução")
     batch_parser.add_argument(
         "--workers",
@@ -141,6 +158,7 @@ def main() -> int:
                 dry_run=not args.execute,
                 lookup_isbn=not args.no_lookup_isbn,
                 workers=args.workers,
+                replace_existing=args.replace_existing,
             )
             print(report.to_json())
             if args.execute:
@@ -157,6 +175,7 @@ def main() -> int:
             print(f"CBR processado: {result.output}")
             print(f"estratégia: {result.strategy}")
             print(f"páginas: {result.page_count}")
+            print(f"capa: {result.first_page}")
             if result.warnings:
                 print(f"avisos: {' | '.join(result.warnings)}")
             return 0

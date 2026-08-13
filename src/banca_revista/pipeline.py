@@ -26,18 +26,25 @@ class ProcessingResult:
     source: Path
     output: Path
     page_count: int
+    first_page: str
     strategy: str
     metadata: ComicMetadata
     warnings: tuple[str, ...] = ()
 
 
-def process_to_library(source: Path, output: Path, *, lookup_isbn: bool = True) -> ProcessingResult:
+def process_to_library(
+    source: Path,
+    output: Path,
+    *,
+    lookup_isbn: bool = True,
+    replace_existing: bool = False,
+) -> ProcessingResult:
     """Normaliza para RAR 5, executa OCR e publica uma cópia enriquecida."""
     original = source.resolve(strict=True)
     destination = output.resolve()
     if destination.suffix.casefold() != ".cbr":
         raise ConversionError("o arquivo final deve usar a extensão .cbr")
-    if destination.exists():
+    if destination.exists() and not replace_existing:
         raise ConversionError(f"o arquivo final já existe: {destination}")
     destination.parent.mkdir(parents=True, exist_ok=True)
 
@@ -54,15 +61,18 @@ def process_to_library(source: Path, output: Path, *, lookup_isbn: bool = True) 
             warnings.append(f"OCR ignorado: {error}")
         else:
             warnings.extend(candidate.value for candidate in report.candidates if candidate.field == "catalog_error")
+            if not any(candidate.field == "isbn" for candidate in report.candidates):
+                warnings.append(f"ISBN não encontrado nas {len(report.pages)} primeiras páginas")
         metadata = best_effort_metadata(report, fallback_title=original.stem, existing=existing)
         enriched = temporary / "enriched.cbr"
         create_metadata_cbr(normalized, enriched, metadata)
-        _publish_without_overwrite(enriched, destination)
+        _publish(enriched, destination, replace_existing=replace_existing)
 
     return ProcessingResult(
         source=original,
         output=destination,
         page_count=conversion.page_count,
+        first_page=conversion.first_page,
         strategy=conversion.strategy,
         metadata=metadata,
         warnings=tuple(warnings),
@@ -76,7 +86,10 @@ def _read_metadata(path: Path) -> ComicMetadata | None:
         return None
 
 
-def _publish_without_overwrite(temporary: Path, destination: Path) -> None:
+def _publish(temporary: Path, destination: Path, *, replace_existing: bool) -> None:
+    if replace_existing:
+        temporary.replace(destination)
+        return
     try:
         os.link(temporary, destination)
     except FileExistsError as error:

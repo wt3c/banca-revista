@@ -89,23 +89,34 @@ uv run banca-revista to-cbr colecao.zip resultado.cbr
 O modo automático preserva JPEGs de PDFs com exatamente uma imagem por página. Outros PDFs são renderizados a 200 DPI.
 ZIPs de imagens são recompactados; ZIPs contendo vários CBRs são unidos na ordem natural das edições e páginas.
 
-Planeje o processamento completo da pasta do Telegram sem criar arquivos:
+Planeje o processamento completo da pasta padrão do Telegram sem criar arquivos:
 
 ```bash
-uv run banca-revista batch-to-cbr \
-  "/home/boladuz/Downloads/Telegram Desktop" \
-  ~/banca
+uv run banca-revista batch-to-cbr
 ```
 
-Na execução, PDF, ZIP e CBZ são convertidos primeiro. Em seguida, todos os CBRs são normalizados e enriquecidos por
-OCR e consulta de ISBN. Acrescente `--execute` somente depois de revisar o JSON. A execução continua após falhas, não
-sobrescreve saídas, preserva os originais e salva `conversion-report.json` no diretório de destino.
+Na execução, cada arquivo PDF, ZIP ou RAR reconhecido pelo conteúdo passa pela conversão para RAR 5, achatamento das
+páginas na raiz, OCR das duas primeiras imagens, consulta de ISBN e gravação de metadados. Acrescente `--execute`
+somente depois de revisar o JSON:
 
-Cada fase usa 10 processos por padrão. Ajuste explicitamente quando necessário:
+```bash
+uv run banca-revista batch-to-cbr --execute
+```
+
+A execução continua após falhas, não sobrescreve saídas, preserva os originais e salva `conversion-report.json` no
+diretório `~/banca`. O relatório registra os metadados efetivamente gravados e avisa quando não encontra ISBN nas duas
+primeiras imagens.
+
+Até 10 pipelines completos são executados em processos independentes por padrão. As etapas de um mesmo arquivo são
+sequenciais porque dependem do resultado anterior, enquanto arquivos diferentes avançam em paralelo. Ajuste o limite
+explicitamente quando necessário:
 
 ```bash
 uv run banca-revista batch-to-cbr origem ~/banca --execute --workers 10
 ```
+
+Para reconstruir saídas existentes, use `--replace-existing`. Cada arquivo anterior permanece disponível até a nova
+cópia sem senha passar por todas as validações e substituí-lo atomicamente.
 
 ## Documentação
 

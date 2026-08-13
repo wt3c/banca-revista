@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import shutil
+import subprocess
 import zipfile
 from pathlib import Path
 
@@ -61,6 +62,12 @@ def test_convert_zip_images_creates_true_cbr_in_natural_order(tmp_path: Path) ->
     assert result.input_format == "zip"
     assert result.strategy == "zip-images"
     assert result.page_count == 2
+    password_probe = subprocess.run(
+        ["unrar", "t", "-idq", "-pwrong-password", "--", str(output)],
+        check=False,
+        capture_output=True,
+    )
+    assert password_probe.returncode == 0
     with open_rar_member(output, "000001.jpg") as first:
         assert first.read() == b"\xff\xd8\xffpage-2"
     with open_rar_member(output, "000002.jpg") as second:

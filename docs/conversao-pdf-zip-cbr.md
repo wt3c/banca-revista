@@ -51,27 +51,24 @@ bytes das imagens.
 
 ## Processamento em lote
 
-O modo em lote trabalha em duas fases no primeiro nível da pasta:
+O modo em lote inspeciona, pelo conteúdo, os arquivos no primeiro nível da pasta e executa para cada entrada suportada:
 
-1. converte `.pdf`, `.zip` e `.cbz` para CBR;
-2. normaliza todos os `.cbr`, aplica OCR nas primeiras páginas e grava os metadados encontrados.
+1. converte PDF, ZIP ou RAR para um CBR verdadeiro em RAR 5;
+2. coloca as páginas diretamente na raiz e valida ordem, quantidade e conteúdo;
+3. aplica OCR nas duas primeiras imagens e consulta o catálogo NDL quando encontra um ISBN válido;
+4. grava os metadados encontrados e publica a cópia validada em `~/banca`.
 
 Sem `--execute`, ele apenas imprime o plano JSON e não cria o diretório de saída:
 
 ```bash
-uv run banca-revista batch-to-cbr \
-  "/home/boladuz/Downloads/Telegram Desktop" \
-  ~/banca
+uv run banca-revista batch-to-cbr
 ```
 
 Revise cuidadosamente o plano: a pasta atual também contém livros PDF que não são quadrinhos. Formatos não suportados
 ficam registrados como `unsupported`, sem serem alterados. Para executar:
 
 ```bash
-uv run banca-revista batch-to-cbr \
-  "/home/boladuz/Downloads/Telegram Desktop" \
-  ~/banca \
-  --execute
+uv run banca-revista batch-to-cbr --execute
 ```
 
 Cada falha é isolada e registrada. Saídas existentes são marcadas como `skipped`; os itens seguintes continuam sendo
@@ -79,8 +76,9 @@ processados. O primeiro relatório é `conversion-report.json`; lotes posteriore
 sobrescrever o histórico. A pasta de origem permanece intacta: "mover" neste fluxo significa publicar a cópia
 processada em `~/banca` após as validações.
 
-Por padrão, cada fase usa 10 processos independentes. A fase de CBR só começa depois que todas as conversões de
-PDF/ZIP/CBZ terminam. A conclusão pode ocorrer fora de ordem, mas o relatório mantém a ordenação natural do plano:
+Por padrão, até 10 arquivos percorrem seus pipelines completos em processos independentes. As etapas de um arquivo
+são sequenciais porque normalização, OCR, enriquecimento e publicação dependem da etapa anterior. Arquivos diferentes
+avançam em paralelo, podem terminar fora de ordem e permanecem na ordenação natural do relatório:
 
 ```bash
 uv run banca-revista batch-to-cbr \
@@ -92,6 +90,12 @@ uv run banca-revista batch-to-cbr \
 
 Use um valor menor quando memória, disco ou limites de serviços externos forem mais restritos. `--no-lookup-isbn`
 evita consultas ao catálogo durante o lote e elimina o risco de limitação de requisições pelo serviço.
+
+O relatório inclui os metadados efetivamente gravados. Se as duas primeiras imagens não contiverem um ISBN legível,
+o arquivo ainda é publicado com os campos confiáveis obtidos do nome e recebe um aviso explícito no relatório.
+
+O comando não cria CBRs criptografados. Para corrigir saídas de uma versão anterior, `--replace-existing` mantém o
+arquivo atual até a nova cópia sem senha passar por todas as validações e então realiza uma substituição atômica.
 
 ## Validação
 
