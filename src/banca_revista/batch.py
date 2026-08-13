@@ -5,9 +5,11 @@ from __future__ import annotations
 import json
 import os
 import tempfile
+from collections.abc import Callable
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import asdict, dataclass
 from pathlib import Path
+from typing import Literal
 
 from banca_revista.archive import ConversionError, natural_key
 from banca_revista.cbr import detect_cbr_source
@@ -50,6 +52,20 @@ class BatchReport:
         return json.dumps(payload, ensure_ascii=False, indent=2)
 
 
+@dataclass(frozen=True)
+class BatchProgressEvent:
+    """Evento emitido pelo processo pai para atualizar interfaces de progresso."""
+
+    kind: Literal["planned", "completed"]
+    total: int
+    completed: int
+    items: tuple[BatchItem, ...]
+    item: BatchItem | None = None
+
+
+ProgressCallback = Callable[[BatchProgressEvent], None]
+
+
 def plan_batch(base: Path, output_dir: Path) -> tuple[BatchItem, ...]:
     """Planeja arquivos suportados pelo conteúdo, sem confiar na extensão."""
     source_dir = base.resolve(strict=True)
@@ -83,6 +99,7 @@ def run_batch(
     lookup_isbn: bool = True,
     workers: int = DEFAULT_WORKERS,
     replace_existing: bool = False,
+    progress_callback: ProgressCallback | None = None,
 ) -> BatchReport:
     """Executa cada fase em processos isolados e sem sobrescrever saídas."""
     if not 1 <= workers <= MAX_WORKERS:
@@ -90,6 +107,8 @@ def run_batch(
     source_dir = base.resolve(strict=True)
     destination_dir = output_dir.resolve()
     planned = plan_batch(source_dir, destination_dir)
+    if progress_callback is not None:
+        progress_callback(BatchProgressEvent("planned", len(planned), 0, planned))
     if dry_run:
         return BatchReport(source_dir, destination_dir, True, workers, planned)
 
@@ -99,6 +118,16 @@ def run_batch(
     for index, item in enumerate(planned):
         if item.status == "unsupported":
             completed[index] = item
+            if progress_callback is not None:
+                progress_callback(
+                    BatchProgressEvent(
+                        "completed",
+                        len(planned),
+                        sum(result is not None for result in completed),
+                        planned,
+                        item,
+                    )
+                )
             continue
         pending.append((index, item))
 
@@ -124,6 +153,16 @@ def run_batch(
                     item.phase,
                     "failed",
                     f"falha inesperada no processo: {type(error).__name__}: {error}",
+                )
+            if progress_callback is not None:
+                progress_callback(
+                    BatchProgressEvent(
+                        "completed",
+                        len(planned),
+                        sum(result is not None for result in completed),
+                        planned,
+                        completed[index],
+                    )
                 )
 
     return BatchReport(

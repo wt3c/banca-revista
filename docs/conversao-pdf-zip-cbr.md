@@ -97,6 +97,11 @@ o arquivo ainda é publicado com os campos confiáveis obtidos do nome e recebe 
 O comando não cria CBRs criptografados. Para corrigir saídas de uma versão anterior, `--replace-existing` mantém o
 arquivo atual até a nova cópia sem senha passar por todas as validações e então realiza uma substituição atômica.
 
+Durante a execução, barras coloridas apresentam o progresso total e por fase, percentual, quantidade concluída, tempo
+decorrido e último arquivo finalizado. O painel de encerramento separa sucessos, avisos, arquivos ignorados, falhas e
+ISBNs encontrados. Use `--json` quando outro programa precisar consumir a saída; o relatório em arquivo continua sendo
+salvo normalmente nas execuções.
+
 ## Validação
 
 Antes de publicar a saída, a ferramenta:

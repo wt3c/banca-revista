@@ -6,12 +6,15 @@ import argparse
 import sys
 from pathlib import Path
 
+from rich.console import Console
+
 from banca_revista.archive import ConversionError, convert_rar_to_cbz, inspect_rar
 from banca_revista.batch import DEFAULT_WORKERS, next_report_path, run_batch, save_report
 from banca_revista.cbr import convert_to_cbr
 from banca_revista.metadata import ComicMetadata, create_metadata_cbr, metadata_from_ocr
 from banca_revista.ocr import analyze_cbr
 from banca_revista.pipeline import process_to_library
+from banca_revista.presentation import BatchProgressDisplay, render_plan, render_summary
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -92,6 +95,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     batch_parser.add_argument("--report", type=Path, help="arquivo JSON do relatório durante a execução")
     batch_parser.add_argument(
+        "--json",
+        action="store_true",
+        help="imprime JSON em vez da interface colorida (útil para automação)",
+    )
+    batch_parser.add_argument(
         "--workers",
         type=int,
         default=DEFAULT_WORKERS,
@@ -152,19 +160,42 @@ def main() -> int:
             print(f"capa: {result.first_page}")
             return 0
         if args.command == "batch-to-cbr":
-            report = run_batch(
-                args.base,
-                args.output_dir,
-                dry_run=not args.execute,
-                lookup_isbn=not args.no_lookup_isbn,
-                workers=args.workers,
-                replace_existing=args.replace_existing,
-            )
-            print(report.to_json())
+            console = Console()
+            if args.execute and not args.json:
+                with BatchProgressDisplay(
+                    console,
+                    base=args.base,
+                    output_dir=args.output_dir,
+                    workers=args.workers,
+                ) as display:
+                    report = run_batch(
+                        args.base,
+                        args.output_dir,
+                        dry_run=False,
+                        lookup_isbn=not args.no_lookup_isbn,
+                        workers=args.workers,
+                        replace_existing=args.replace_existing,
+                        progress_callback=display,
+                    )
+            else:
+                report = run_batch(
+                    args.base,
+                    args.output_dir,
+                    dry_run=not args.execute,
+                    lookup_isbn=not args.no_lookup_isbn,
+                    workers=args.workers,
+                    replace_existing=args.replace_existing,
+                )
+            report_path = None
             if args.execute:
                 report_path = args.report or next_report_path(args.output_dir)
-                saved = save_report(report, report_path)
-                print(f"relatório salvo: {saved}")
+                report_path = save_report(report, report_path)
+            if args.json:
+                print(report.to_json())
+            elif report.dry_run:
+                render_plan(console, report)
+            else:
+                render_summary(console, report, report_path=report_path)
             return 0
         if args.command == "process":
             result = process_to_library(

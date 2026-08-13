@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 from banca_revista.archive import ConversionError
-from banca_revista.batch import next_report_path, plan_batch, run_batch, save_report
+from banca_revista.batch import BatchProgressEvent, next_report_path, plan_batch, run_batch, save_report
 
 
 def test_batch_is_dry_run_by_default_and_does_not_create_output(tmp_path: Path) -> None:
@@ -25,6 +25,18 @@ def test_batch_is_dry_run_by_default_and_does_not_create_output(tmp_path: Path) 
     assert [item.source.name for item in report.items] == ["issue 2.zip", "issue 10.pdf"]
     assert all(item.status == "planned" for item in report.items)
     assert not output.exists()
+
+
+def test_batch_emits_planning_event_during_dry_run(tmp_path: Path) -> None:
+    (tmp_path / "issue.pdf").write_bytes(b"%PDF-1.4")
+    events: list[BatchProgressEvent] = []
+
+    run_batch(tmp_path, tmp_path / "output", progress_callback=events.append)
+
+    assert len(events) == 1
+    assert events[0].kind == "planned"
+    assert events[0].total == 1
+    assert events[0].items[0].source.name == "issue.pdf"
 
 
 @pytest.mark.parametrize("workers", [0, 65])

@@ -118,6 +118,15 @@ uv run banca-revista batch-to-cbr origem ~/banca --execute --workers 10
 Para reconstruir saídas existentes, use `--replace-existing`. Cada arquivo anterior permanece disponível até a nova
 cópia sem senha passar por todas as validações e substituí-lo atomicamente.
 
+Durante a execução, a interface colorida mostra o total de arquivos, barras por fase, percentual, contadores, tempo
+decorrido e o último arquivo concluído. O painel final resume processados, ignorados, falhas, avisos e ISBNs
+encontrados. Para integrar o comando a scripts sem códigos de cor ou elementos visuais, solicite a saída estruturada:
+
+```bash
+uv run banca-revista batch-to-cbr --json
+uv run banca-revista batch-to-cbr --execute --json
+```
+
 ## Documentação
 
 - [Diagnóstico de capas ausentes em CBR e CBZ](docs/calibre-capas-cbr-cbz.md)
