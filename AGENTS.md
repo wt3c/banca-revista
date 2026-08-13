@@ -2,8 +2,8 @@
 
 ## Objetivo
 
-- Desenvolver uma ferramenta Python para diagnosticar, normalizar e converter quadrinhos para formatos compatíveis
-  com o Calibre, com foco inicial em `CBR` e `CBZ`.
+- Desenvolver uma ferramenta Python para diagnosticar, normalizar e converter quadrinhos para formatos compatíveis com o
+  Calibre, com foco inicial em `CBR` e `CBZ`.
 - Consulte `docs/calibre-capas-cbr-cbz.md` antes de alterar regras de normalização ou critérios de validação.
 - Use o código oficial do Calibre em <https://github.com/kovidgoyal/calibre> como referência para compatibilidade; não
   copie componentes nem assuma comportamento sem conferir a implementação e a licença atuais.
