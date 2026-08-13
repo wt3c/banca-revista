@@ -218,6 +218,7 @@ tempCodeRunnerFile.py
 *.zip
 *.7z
 .banca-revista/
+pilotos/
 
 # Marimo
 marimo/_static/
