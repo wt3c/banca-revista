@@ -55,8 +55,8 @@ Analise as duas primeiras páginas e gere um relatório JSON com valores, evidê
 uv run banca-revista ocr "/caminho/arquivo.cbr"
 ```
 
-Acrescente `--lookup-isbn` para consultar o catálogo oficial da Biblioteca Nacional do Japão. Somente o ISBN é
-enviado; as imagens permanecem locais.
+Acrescente `--lookup-isbn` para consultar o catálogo oficial da Biblioteca Nacional do Japão. Somente o ISBN é enviado;
+as imagens permanecem locais.
 
 Crie uma nova cópia CBR com capa automática e metadados `ComicBookInfo` sem alterar a origem:
 
