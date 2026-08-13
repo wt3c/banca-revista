@@ -40,7 +40,12 @@ class BatchProgressDisplay:
             expand=True,
         )
         self.overall_task: TaskID | None = None
+        self.worker_status_task: TaskID | None = None
         self.phase_tasks: dict[str, TaskID] = {}
+        self.worker_tasks: dict[int, TaskID] = {}
+        self.worker_items: dict[int, Path] = {}
+        self.total = 0
+        self.completed = 0
         self.statuses: Counter[str] = Counter()
 
     def __enter__(self) -> BatchProgressDisplay:
@@ -60,9 +65,16 @@ class BatchProgressDisplay:
         if event.kind == "planned":
             self._start(event.items)
             return
+        if event.kind == "started":
+            self._worker_started(event)
+            return
+        if event.kind == "stage":
+            self._worker_stage(event)
+            return
         if event.item is None or self.overall_task is None:
             return
         item = event.item
+        self.completed += 1
         self.statuses[item.status] += 1
         self.progress.advance(self.overall_task)
         phase_task = self.phase_tasks.get(item.phase)
@@ -75,14 +87,71 @@ class BatchProgressDisplay:
                 f"[bold blue]🚀 Total[/bold blue] [dim]•[/dim] [{style}]{icon} {escape(item.source.name)}[/{style}]"
             ),
         )
+        worker_id = event.worker_id or self._worker_for(item.source)
+        if worker_id is not None:
+            task_id = self.worker_tasks.pop(worker_id, None)
+            self.worker_items.pop(worker_id, None)
+            if task_id is not None:
+                self.progress.remove_task(task_id)
+        self._update_worker_status()
 
     def _start(self, items: tuple[BatchItem, ...]) -> None:
         phase_counts = Counter(item.phase for item in items)
+        self.total = len(items)
         self.progress.console.print(_configuration_table(self.base, self.output_dir, self.workers, phase_counts))
         self.overall_task = self.progress.add_task("[bold blue]🚀 Total[/bold blue]", total=len(items))
+        self.worker_status_task = self.progress.add_task("", total=len(items))
+        self._update_worker_status()
         for phase, count in phase_counts.items():
             label, style = _PHASES[phase]
             self.phase_tasks[phase] = self.progress.add_task(f"[{style}]{label}[/{style}]", total=count)
+
+    def _worker_started(self, event: BatchProgressEvent) -> None:
+        if event.worker_id is None or event.item is None:
+            return
+        self.worker_items[event.worker_id] = event.item.source
+        self.worker_tasks[event.worker_id] = self.progress.add_task(
+            self._worker_description(event.worker_id, "⏳ Iniciando", event.item.source.name),
+            total=event.stage_total or 4,
+        )
+        self._update_worker_status()
+
+    def _worker_stage(self, event: BatchProgressEvent) -> None:
+        if event.worker_id is None or event.item is None or event.stage is None:
+            return
+        task_id = self.worker_tasks.get(event.worker_id)
+        if task_id is None:
+            self._worker_started(event)
+            task_id = self.worker_tasks[event.worker_id]
+        self.progress.update(
+            task_id,
+            description=self._worker_description(event.worker_id, event.stage, event.item.source.name),
+            completed=max(event.stage_position - 1, 0),
+            total=event.stage_total or 4,
+        )
+
+    def _update_worker_status(self) -> None:
+        if self.worker_status_task is None:
+            return
+        active = len(self.worker_tasks)
+        queued = max(self.total - self.completed - active, 0)
+        self.progress.update(
+            self.worker_status_task,
+            description=(
+                f"[bold cyan]⚙️ Workers ativos: {active}/{self.workers}[/bold cyan] "
+                f"[dim]•[/dim] [yellow]⏳ Na fila: {queued}[/yellow]"
+            ),
+            completed=self.completed,
+        )
+
+    def _worker_for(self, source: Path) -> int | None:
+        return next(
+            (worker_id for worker_id, active_source in self.worker_items.items() if active_source == source), None
+        )
+
+    @staticmethod
+    def _worker_description(worker_id: int, stage: str, filename: str) -> str:
+        return f"[cyan]⚙️ {worker_id}[/cyan] [bold]{stage}[/bold] [dim]•[/dim] {escape(filename)}"
 
 
 def render_plan(console: Console, report: BatchReport) -> None:

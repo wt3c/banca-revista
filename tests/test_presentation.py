@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from io import StringIO
 from pathlib import Path
 
@@ -20,16 +21,37 @@ def test_progress_display_shows_counts_phases_percentage_and_current_file(tmp_pa
 
     with BatchProgressDisplay(console, base=tmp_path, output_dir=tmp_path / "out", workers=2) as display:
         display(BatchProgressEvent("planned", 2, 0, items))
+        display(BatchProgressEvent("started", item=items[0], worker_id=101))
+        display(
+            BatchProgressEvent(
+                "stage",
+                item=items[0],
+                worker_id=101,
+                stage="🔎 Lendo capa, OCR e ISBN",
+                stage_position=2,
+                stage_total=4,
+            )
+        )
+        display(BatchProgressEvent("started", item=items[1], worker_id=202))
+        status = next(task for task in display.progress.tasks if task.id == display.worker_status_task)
+        first_worker = next(task for task in display.progress.tasks if task.id == display.worker_tasks[101])
+        assert "Workers ativos: 2/2" in status.description
+        assert "Na fila: 0" in status.description
+        assert "Lendo capa, OCR e ISBN" in first_worker.description
+        assert "101" in first_worker.description
         display(BatchProgressEvent("completed", 2, 1, items, _processed(items[0])))
         display(BatchProgressEvent("completed", 2, 2, items, _processed(items[1])))
+        assert display.worker_tasks == {}
+        assert display.completed == 2
 
     output = stream.getvalue()
-    assert "📦 Arquivos" in output
-    assert "2" in output
-    assert "🔄 Conversão" in output
-    assert "📚 Normalização + metadados" in output
-    assert "100%" in output
-    assert "volume 2.cbr" in output
+    plain_output = re.sub(r"\x1b\[[0-9;?]*[A-Za-z]", "", output)
+    assert "📦 Arquivos" in plain_output
+    assert "2" in plain_output
+    assert "🔄 Conversão" in plain_output
+    assert "📚 Normalização + metadados" in plain_output
+    assert "100%" in plain_output
+    assert "volume 2.cbr" in plain_output
     assert "\x1b[" in output
 
 

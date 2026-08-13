@@ -6,10 +6,12 @@ import json
 import os
 import tempfile
 from collections.abc import Callable
-from concurrent.futures import ProcessPoolExecutor, as_completed
+from concurrent.futures import FIRST_COMPLETED, ProcessPoolExecutor, wait
 from dataclasses import asdict, dataclass
+from multiprocessing import get_context
 from pathlib import Path
-from typing import Literal
+from queue import Empty
+from typing import Literal, Protocol
 
 from banca_revista.archive import ConversionError, natural_key
 from banca_revista.cbr import detect_cbr_source
@@ -54,16 +56,29 @@ class BatchReport:
 
 @dataclass(frozen=True)
 class BatchProgressEvent:
-    """Evento emitido pelo processo pai para atualizar interfaces de progresso."""
+    """Evento emitido pelo lote ou por um worker para atualizar a interface."""
 
-    kind: Literal["planned", "completed"]
-    total: int
-    completed: int
-    items: tuple[BatchItem, ...]
+    kind: Literal["planned", "started", "stage", "completed"]
+    total: int = 0
+    completed: int = 0
+    items: tuple[BatchItem, ...] = ()
     item: BatchItem | None = None
+    worker_id: int | None = None
+    stage: str | None = None
+    stage_position: int = 0
+    stage_total: int = 0
 
 
 ProgressCallback = Callable[[BatchProgressEvent], None]
+
+
+class ProgressQueue(Protocol):
+    def put(self, event: BatchProgressEvent) -> None: ...
+
+    def get_nowait(self) -> BatchProgressEvent: ...
+
+
+_WORKER_PROGRESS_QUEUE: ProgressQueue | None = None
 
 
 def plan_batch(base: Path, output_dir: Path) -> tuple[BatchItem, ...]:
@@ -131,62 +146,122 @@ def run_batch(
             continue
         pending.append((index, item))
 
-    with ProcessPoolExecutor(max_workers=workers) as executor:
-        futures = {
-            executor.submit(
-                _process_item,
-                item,
-                lookup_isbn=lookup_isbn,
-                replace_existing=replace_existing,
-            ): index
-            for index, item in pending
-        }
-        for future in as_completed(futures):
-            index = futures[future]
-            item = planned[index]
-            try:
-                completed[index] = future.result()
-            except Exception as error:  # pragma: no cover - protege contra falha abrupta do subprocesso
-                completed[index] = BatchItem(
-                    item.source,
-                    item.output,
-                    item.phase,
-                    "failed",
-                    f"falha inesperada no processo: {type(error).__name__}: {error}",
-                )
-            if progress_callback is not None:
-                progress_callback(
-                    BatchProgressEvent(
-                        "completed",
-                        len(planned),
-                        sum(result is not None for result in completed),
-                        planned,
-                        completed[index],
-                    )
-                )
+    event_queue = get_context().Queue() if progress_callback is not None else None
+    try:
+        with ProcessPoolExecutor(
+            max_workers=workers,
+            initializer=_initialize_worker_progress,
+            initargs=(event_queue,),
+        ) as executor:
+            futures = {
+                executor.submit(
+                    _process_item,
+                    item,
+                    lookup_isbn=lookup_isbn,
+                    replace_existing=replace_existing,
+                ): index
+                for index, item in pending
+            }
+            remaining = set(futures)
+            while remaining:
+                done, remaining = wait(remaining, timeout=0.1, return_when=FIRST_COMPLETED)
+                _drain_progress_events(event_queue, progress_callback)
+                for future in done:
+                    index = futures[future]
+                    item = planned[index]
+                    try:
+                        completed[index] = future.result()
+                    except Exception as error:  # pragma: no cover - protege contra falha abrupta do subprocesso
+                        completed[index] = BatchItem(
+                            item.source,
+                            item.output,
+                            item.phase,
+                            "failed",
+                            f"falha inesperada no processo: {type(error).__name__}: {error}",
+                        )
+                        if progress_callback is not None:
+                            progress_callback(BatchProgressEvent("completed", item=completed[index]))
+                    else:
+                        _drain_progress_events(event_queue, progress_callback)
+            _drain_progress_events(event_queue, progress_callback)
+        _drain_progress_events(event_queue, progress_callback)
+    finally:
+        if event_queue is not None:
+            event_queue.close()
+            event_queue.join_thread()
 
     return BatchReport(
         source_dir, destination_dir, False, workers, tuple(item for item in completed if item is not None)
     )
 
 
-def _process_item(item: BatchItem, *, lookup_isbn: bool, replace_existing: bool) -> BatchItem:
+def _process_item(
+    item: BatchItem,
+    *,
+    lookup_isbn: bool,
+    replace_existing: bool,
+) -> BatchItem:
     """Processa um item em subprocesso sem depender de estado mutável do pai."""
+    worker_id = os.getpid()
+    _put_progress_event(_WORKER_PROGRESS_QUEUE, BatchProgressEvent("started", item=item, worker_id=worker_id))
     if item.output.exists() and not replace_existing:
-        return BatchItem(item.source, item.output, item.phase, "skipped", "saída já existe")
+        result = BatchItem(item.source, item.output, item.phase, "skipped", "saída já existe")
+        _put_progress_event(_WORKER_PROGRESS_QUEUE, BatchProgressEvent("completed", item=result, worker_id=worker_id))
+        return result
+
+    def emit_stage(label: str, position: int, total: int) -> None:
+        _put_progress_event(
+            _WORKER_PROGRESS_QUEUE,
+            BatchProgressEvent(
+                "stage",
+                item=item,
+                worker_id=worker_id,
+                stage=label,
+                stage_position=position,
+                stage_total=total,
+            ),
+        )
+
     try:
         result = process_to_library(
             item.source,
             item.output,
             lookup_isbn=lookup_isbn,
             replace_existing=replace_existing,
+            stage_callback=emit_stage,
         )
     except (ConversionError, OSError) as error:
-        return BatchItem(item.source, item.output, item.phase, "failed", str(error))
+        result = BatchItem(item.source, item.output, item.phase, "failed", str(error))
+        _put_progress_event(_WORKER_PROGRESS_QUEUE, BatchProgressEvent("completed", item=result, worker_id=worker_id))
+        return result
     detail = f"{result.page_count} páginas; capa: {result.first_page}; {result.strategy}"
     if result.warnings:
         detail = f"{detail}; avisos: {' | '.join(result.warnings)}"
-    return BatchItem(item.source, item.output, item.phase, "processed", detail, result.metadata)
+    completed = BatchItem(item.source, item.output, item.phase, "processed", detail, result.metadata)
+    _put_progress_event(_WORKER_PROGRESS_QUEUE, BatchProgressEvent("completed", item=completed, worker_id=worker_id))
+    return completed
+
+
+def _initialize_worker_progress(queue: ProgressQueue | None) -> None:
+    global _WORKER_PROGRESS_QUEUE
+    _WORKER_PROGRESS_QUEUE = queue
+
+
+def _put_progress_event(queue: ProgressQueue | None, event: BatchProgressEvent) -> None:
+    if queue is not None:
+        queue.put(event)
+
+
+def _drain_progress_events(queue: ProgressQueue | None, callback: ProgressCallback | None) -> None:
+    if queue is None:
+        return
+    while True:
+        try:
+            event = queue.get_nowait()
+        except Empty:
+            return
+        if callback is not None:
+            callback(event)
 
 
 def save_report(report: BatchReport, path: Path) -> Path:

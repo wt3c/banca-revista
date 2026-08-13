@@ -50,7 +50,8 @@ def test_pdf_lossless_requires_one_jpeg_per_page() -> None:
 
 
 @pytest.mark.skipif(not shutil.which("rar") or not shutil.which("unrar"), reason="rar e unrar não instalados")
-def test_convert_zip_images_creates_true_cbr_in_natural_order(tmp_path: Path) -> None:
+def test_convert_zip_images_creates_true_cbr_in_natural_order(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.chdir(tmp_path)
     source = tmp_path / "comic.zip"
     with zipfile.ZipFile(source, "w") as archive:
         archive.writestr("volume/10.jpg", b"\xff\xd8\xffpage-10")
@@ -72,3 +73,4 @@ def test_convert_zip_images_creates_true_cbr_in_natural_order(tmp_path: Path) ->
         assert first.read() == b"\xff\xd8\xffpage-2"
     with open_rar_member(output, "000002.jpg") as second:
         assert second.read() == b"\xff\xd8\xffpage-10"
+    assert list(tmp_path.glob("__rar_*")) == []

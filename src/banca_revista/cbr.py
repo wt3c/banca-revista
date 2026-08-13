@@ -342,6 +342,7 @@ def _create_rar(archive: Path, pages: list[Path], metadata: ComicMetadata, *, ra
         "-m0",
         "-idq",
         "-ep1",
+        f"-w{temporary}",
         f"-z{comment}",
         "--",
         os.fspath(archive),

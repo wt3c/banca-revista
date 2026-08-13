@@ -14,7 +14,11 @@ from banca_revista.pipeline import process_to_library
 
 
 @pytest.mark.skipif(not shutil.which("rar") or not shutil.which("unrar"), reason="rar e unrar não instalados")
-def test_pipeline_publishes_even_when_ocr_cannot_read_page(tmp_path: Path) -> None:
+def test_pipeline_publishes_even_when_ocr_cannot_read_page(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
     source = tmp_path / "comic.zip"
     with zipfile.ZipFile(source, "w") as archive:
         archive.writestr("001.jpg", b"\xff\xd8\xffnot-a-complete-jpeg")
@@ -36,6 +40,7 @@ def test_pipeline_publishes_even_when_ocr_cannot_read_page(tmp_path: Path) -> No
     assert password_probe.returncode == 0
     with open_rar_member(output, "000001.jpg") as page:
         assert page.read() == b"\xff\xd8\xffnot-a-complete-jpeg"
+    assert list(tmp_path.glob("__rar_*")) == []
 
 
 def test_pipeline_reports_when_first_two_pages_have_no_isbn(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

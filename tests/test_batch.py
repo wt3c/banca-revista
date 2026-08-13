@@ -97,13 +97,31 @@ def test_batch_executes_items_in_process_pool(tmp_path: Path) -> None:
             archive.writestr("001.jpg", b"\xff\xd8\xffpage")
     output = tmp_path / "output"
 
-    report = run_batch(source, output, dry_run=False, lookup_isbn=False, workers=2)
+    events: list[BatchProgressEvent] = []
+    report = run_batch(
+        source,
+        output,
+        dry_run=False,
+        lookup_isbn=False,
+        workers=2,
+        progress_callback=events.append,
+    )
 
     assert report.workers == 2
     assert [item.status for item in report.items] == ["processed", "processed"]
     assert [item.metadata.title for item in report.items if item.metadata] == ["issue 1", "issue 2"]
     assert [item["metadata"]["title"] for item in json.loads(report.to_json())["items"]] == ["issue 1", "issue 2"]
     assert sorted(path.name for path in output.glob("*.cbr")) == ["issue 1.cbr", "issue 2.cbr"]
+    started = [event for event in events if event.kind == "started"]
+    assert len(started) == 2
+    assert all(event.worker_id is not None for event in started)
+    assert {event.kind for event in events} == {"planned", "started", "stage", "completed"}
+    assert {event.stage for event in events if event.kind == "stage"} == {
+        "🔄 Normalizando para RAR 5",
+        "🔎 Lendo capa, OCR e ISBN",
+        "📝 Metadados e validação final",
+        "📤 Publicando na biblioteca",
+    }
 
 
 @pytest.mark.skipif(

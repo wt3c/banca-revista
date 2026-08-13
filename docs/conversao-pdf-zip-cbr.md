@@ -98,9 +98,9 @@ O comando não cria CBRs criptografados. Para corrigir saídas de uma versão an
 arquivo atual até a nova cópia sem senha passar por todas as validações e então realiza uma substituição atômica.
 
 Durante a execução, barras coloridas apresentam o progresso total e por fase, percentual, quantidade concluída, tempo
-decorrido e último arquivo finalizado. O painel de encerramento separa sucessos, avisos, arquivos ignorados, falhas e
-ISBNs encontrados. Use `--json` quando outro programa precisar consumir a saída; o relatório em arquivo continua sendo
-salvo normalmente nas execuções.
+decorrido, workers ativos, fila restante e a etapa de cada arquivo em andamento. O painel de encerramento separa
+sucessos, avisos, arquivos ignorados, falhas e ISBNs encontrados. Use `--json` quando outro programa precisar consumir
+a saída; o relatório em arquivo continua sendo salvo normalmente nas execuções.
 
 ## Validação
 

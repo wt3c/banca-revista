@@ -172,7 +172,18 @@ def create_metadata_cbr(source: Path, output: Path, metadata: ComicMetadata, *, 
         with tempfile.NamedTemporaryFile("w", encoding="utf-8", suffix=".json", delete=False) as comment_file:
             comment_file.write(metadata.to_comment())
             comment_path = Path(comment_file.name)
-        _run_rar([rar, "c", f"-z{comment_path}", "-inul", "--", os.fspath(temporary)])
+        with tempfile.TemporaryDirectory(prefix=".banca-rar-", dir=destination.parent) as rar_work_name:
+            _run_rar(
+                [
+                    rar,
+                    "c",
+                    f"-z{comment_path}",
+                    "-inul",
+                    f"-w{rar_work_name}",
+                    "--",
+                    os.fspath(temporary),
+                ]
+            )
         inspect_rar(temporary)
         if read_rar_comment(temporary, rar=rar) != metadata.to_comment():
             raise ConversionError("os metadados gravados no CBR não correspondem ao conteúdo solicitado")
