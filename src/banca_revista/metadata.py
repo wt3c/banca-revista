@@ -46,6 +46,75 @@ class ComicMetadata:
         return json.dumps({"ComicBookInfo/1.0": book}, ensure_ascii=False, separators=(",", ":"))
 
 
+def parse_comic_metadata(comment: str) -> ComicMetadata | None:
+    """Converte um comentário ComicBookInfo existente sem confiar em sua estrutura."""
+    try:
+        document = json.loads(comment)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(document, dict):
+        return None
+    book = next((value for key, value in document.items() if key.startswith("ComicBookInfo")), None)
+    if not isinstance(book, dict):
+        return None
+    title = book.get("title")
+    if not isinstance(title, str) or not title.strip():
+        return None
+    credits = book.get("credits")
+    authors: list[str] = []
+    if isinstance(credits, list):
+        authors = [
+            credit["person"].strip()
+            for credit in credits
+            if isinstance(credit, dict)
+            and credit.get("role") in {"Writer", "Artist", "Cartoonist", "Creator"}
+            and isinstance(credit.get("person"), str)
+            and credit["person"].strip()
+        ]
+    tags = book.get("tags")
+    clean_tags = (
+        tuple(tag.strip() for tag in tags if isinstance(tag, str) and tag.strip()) if isinstance(tags, list) else ()
+    )
+    volume = book.get("volume")
+    return ComicMetadata(
+        title=title.strip(),
+        authors=tuple(authors),
+        series=_optional_text(book.get("series")),
+        volume=float(volume) if isinstance(volume, (int, float)) else None,
+        isbn=_optional_text(book.get("isbn")),
+        publisher=_optional_text(book.get("publisher")),
+        tags=clean_tags,
+        comments=_optional_text(book.get("comments")),
+    )
+
+
+def best_effort_metadata(
+    report: OcrReport | None,
+    *,
+    fallback_title: str,
+    existing: ComicMetadata | None = None,
+) -> ComicMetadata:
+    """Combina metadados existentes e apenas inferências de alta confiança."""
+    values = (
+        {candidate.field: candidate.value for candidate in report.candidates if candidate.confidence >= 0.9}
+        if report is not None
+        else {}
+    )
+    volume_text = values.get("volume")
+    inferred_volume = float(volume_text) if volume_text is not None else None
+    catalog_author = values.get("author")
+    return ComicMetadata(
+        title=existing.title if existing is not None else fallback_title,
+        authors=existing.authors if existing and existing.authors else ((catalog_author,) if catalog_author else ()),
+        series=(existing.series if existing else None) or values.get("title"),
+        volume=(existing.volume if existing else None) if existing and existing.volume is not None else inferred_volume,
+        isbn=(existing.isbn if existing else None) or values.get("isbn"),
+        publisher=(existing.publisher if existing else None) or values.get("publisher"),
+        tags=existing.tags if existing else (),
+        comments=existing.comments if existing else None,
+    )
+
+
 def metadata_from_ocr(
     report: OcrReport,
     *,
@@ -140,3 +209,7 @@ def _publish_without_overwrite(temporary: Path, destination: Path) -> None:
     except FileExistsError as error:
         raise ConversionError(f"o arquivo de saída já existe: {destination}") from error
     temporary.unlink()
+
+
+def _optional_text(value: object) -> str | None:
+    return value.strip() if isinstance(value, str) and value.strip() else None

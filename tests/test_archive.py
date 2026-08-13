@@ -41,6 +41,20 @@ def test_plan_pages_rejects_collisions_after_flattening() -> None:
         plan_pages(["chapter-a/001.jpg", "chapter-b/001.JPG"])
 
 
+def test_plan_pages_allows_repeated_names_when_paths_are_preserved() -> None:
+    pages, common_parent = plan_pages(
+        ["issue 10/001.jpg", "issue 2/001.jpg", "issue 1/001.jpg"],
+        flatten=False,
+    )
+
+    assert [page.output_name for page in pages] == [
+        "issue 1/001.jpg",
+        "issue 2/001.jpg",
+        "issue 10/001.jpg",
+    ]
+    assert common_parent is None
+
+
 def test_convert_creates_valid_flat_cbz_and_preserves_bytes(tmp_path: Path) -> None:
     source = tmp_path / "original.cbr"
     source.write_bytes(b"Rar!\x1a\x07\x01\x00test")

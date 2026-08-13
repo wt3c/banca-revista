@@ -14,6 +14,7 @@ Requisitos:
 - Python 3.12 ou superior;
 - [uv](https://docs.astral.sh/uv/).
 - `unrar` e `rar` para ler e criar metadados em CBR;
+- `poppler-tools` para extrair ou renderizar páginas de PDF;
 - Tesseract com os idiomas `eng` e `por`, além do ImageMagick, para analisar texto das páginas.
 
 Prepare o ambiente e execute as verificações:
@@ -78,12 +79,41 @@ uv run banca-revista enrich origem.cbr resultado.cbr \
   --tag "Mangá"
 ```
 
+Converta individualmente um PDF ou ZIP para CBR:
+
+```bash
+uv run banca-revista to-cbr origem.pdf resultado.cbr
+uv run banca-revista to-cbr colecao.zip resultado.cbr
+```
+
+O modo automático preserva JPEGs de PDFs com exatamente uma imagem por página. Outros PDFs são renderizados a 200 DPI.
+ZIPs de imagens são recompactados; ZIPs contendo vários CBRs são unidos na ordem natural das edições e páginas.
+
+Planeje o processamento completo da pasta do Telegram sem criar arquivos:
+
+```bash
+uv run banca-revista batch-to-cbr \
+  "/home/boladuz/Downloads/Telegram Desktop" \
+  ~/banca
+```
+
+Na execução, PDF, ZIP e CBZ são convertidos primeiro. Em seguida, todos os CBRs são normalizados e enriquecidos por
+OCR e consulta de ISBN. Acrescente `--execute` somente depois de revisar o JSON. A execução continua após falhas, não
+sobrescreve saídas, preserva os originais e salva `conversion-report.json` no diretório de destino.
+
+Cada fase usa 10 processos por padrão. Ajuste explicitamente quando necessário:
+
+```bash
+uv run banca-revista batch-to-cbr origem ~/banca --execute --workers 10
+```
+
 ## Documentação
 
 - [Diagnóstico de capas ausentes em CBR e CBZ](docs/calibre-capas-cbr-cbz.md)
+- [Conversão de PDF e ZIP para CBR](docs/conversao-pdf-zip-cbr.md)
 
 ## Estado atual
 
-A inspeção e a conversão segura de um único `CBR` estão implementadas. O piloto validado também foi recompactado como
-RAR/CBR verdadeiro e salvo em `pilotos/`, uma pasta local ignorada pelo Git. O processamento em lote e a publicação em
-`~/banca` permanecem para uma próxima etapa.
+A inspeção, a conversão segura e o enriquecimento por OCR/metadados estão implementados. O piloto validado também foi
+recompactado como RAR/CBR verdadeiro e salvo em `pilotos/`, uma pasta local ignorada pelo Git. O comando em lote
+converte PDF/ZIP/CBZ, processa os CBRs e publica cópias validadas em `~/banca`.

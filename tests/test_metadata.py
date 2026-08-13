@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from banca_revista.metadata import ComicMetadata, metadata_from_ocr
+from banca_revista.metadata import ComicMetadata, best_effort_metadata, metadata_from_ocr, parse_comic_metadata
 from banca_revista.ocr import MetadataCandidate, OcrReport
 
 
@@ -56,3 +56,16 @@ def test_metadata_from_ocr_promotes_only_confirmed_fields() -> None:
     localized = metadata_from_ocr(report, author="Tsutomu Takahashi", publisher="Panini Comics")
     assert localized.authors == ("Tsutomu Takahashi",)
     assert localized.publisher == "Panini Comics"
+
+
+def test_parse_and_best_effort_preserve_existing_metadata() -> None:
+    existing = ComicMetadata(
+        title="Edição localizada",
+        authors=("Autora Confirmada",),
+        publisher="Editora Local",
+    )
+    parsed = parse_comic_metadata(existing.to_comment())
+
+    merged = best_effort_metadata(None, fallback_title="arquivo", existing=parsed)
+
+    assert merged == existing

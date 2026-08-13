@@ -81,8 +81,8 @@ def natural_key(name: str) -> tuple[tuple[int, int | str], ...]:
     return tuple(parts)
 
 
-def plan_pages(names: Iterable[str]) -> tuple[tuple[Page, ...], str | None]:
-    """Valida entradas e planeja páginas achatadas na raiz do CBZ."""
+def plan_pages(names: Iterable[str], *, flatten: bool = True) -> tuple[tuple[Page, ...], str | None]:
+    """Valida entradas e planeja páginas achatadas ou com caminho preservado."""
     image_paths: list[PurePosixPath] = []
     for raw_name in names:
         normalized = raw_name.replace("\\", "/")
@@ -98,7 +98,7 @@ def plan_pages(names: Iterable[str]) -> tuple[tuple[Page, ...], str | None]:
     output_names: dict[str, str] = {}
     pages: list[Page] = []
     for path in image_paths:
-        output_name = path.name
+        output_name = path.name if flatten else str(path)
         collision_key = output_name.casefold()
         if collision_key in output_names:
             previous = output_names[collision_key]
@@ -112,7 +112,7 @@ def plan_pages(names: Iterable[str]) -> tuple[tuple[Page, ...], str | None]:
     return tuple(pages), common_parent
 
 
-def inspect_rar(path: Path, *, unrar: str = "unrar") -> ArchiveInspection:
+def inspect_rar(path: Path, *, unrar: str = "unrar", flatten: bool = True) -> ArchiveInspection:
     """Testa a integridade e lista as páginas de um RAR sem extraí-lo."""
     source = path.resolve(strict=True)
     if detect_archive_format(source) != "rar":
@@ -121,7 +121,7 @@ def inspect_rar(path: Path, *, unrar: str = "unrar") -> ArchiveInspection:
     _run_unrar([unrar, "t", "-idq", "-p-", "--", os.fspath(source)])
     listing = _run_unrar([unrar, "lb", "-p-", "--", os.fspath(source)])
     names = tuple(line for line in listing.stdout.splitlines() if line)
-    pages, common_parent = plan_pages(names)
+    pages, common_parent = plan_pages(names, flatten=flatten)
     return ArchiveInspection(source=source, archive_format="rar", pages=pages, common_parent=common_parent)
 
 
@@ -143,7 +143,7 @@ def convert_rar_to_cbz(
         raise ConversionError(f"o arquivo de saída já existe: {destination}")
     destination.parent.mkdir(parents=True, exist_ok=True)
 
-    read_member = extractor or (lambda source, name: _open_unrar_member(source, name, unrar=unrar))
+    read_member = extractor or (lambda source, name: open_rar_member(source, name, unrar=unrar))
     descriptor, temporary_name = tempfile.mkstemp(prefix=f".{destination.name}.", suffix=".tmp", dir=destination.parent)
     os.close(descriptor)
     temporary = Path(temporary_name)
@@ -233,7 +233,8 @@ class _UnrarMemberStream:
             raise ConversionError(f"falha ao extrair {self.name!r}: {detail}")
 
 
-def _open_unrar_member(source: Path, name: str, *, unrar: str) -> _UnrarMemberStream:
+def open_rar_member(source: Path, name: str, *, unrar: str = "unrar") -> _UnrarMemberStream:
+    """Abre um membro do RAR como stream sem extraí-lo para o filesystem."""
     try:
         process = subprocess.Popen(
             [unrar, "p", "-inul", "-p-", "--", os.fspath(source), name],

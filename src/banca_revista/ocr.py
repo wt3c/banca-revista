@@ -68,6 +68,7 @@ def analyze_cbr(
     tesseract: str = "tesseract",
     magick: str = "magick",
     lookup_isbn: bool = False,
+    strict_lookup: bool = True,
 ) -> OcrReport:
     """Analisa as primeiras páginas sem modificar o CBR."""
     if page_count < 1:
@@ -111,7 +112,10 @@ def analyze_cbr(
         try:
             catalog = lookup_ndl_isbn(isbn)
         except CatalogError as error:
-            raise OcrError(str(error)) from error
+            if strict_lookup:
+                raise OcrError(str(error)) from error
+            candidates.append(MetadataCandidate("catalog_error", str(error), 0, "consulta por ISBN"))
+            catalog = None
         if catalog is not None:
             catalog_fields = (
                 ("catalog_title", catalog.title),
@@ -199,13 +203,13 @@ def _read_author_regions(image: Path, temporary: Path, *, tesseract: str, magick
                 magick,
                 os.fspath(image),
                 "-auto-orient",
+                "-resize",
+                "3500x3500>",
                 "-gravity",
                 "NorthEast",
                 "-crop",
                 "55%x8%+0+15",
                 "+repage",
-                "-resize",
-                "500%",
                 "-colorspace",
                 "Gray",
                 "-threshold",
@@ -235,7 +239,7 @@ def _read_identifier_region(
             os.fspath(image),
             "-auto-orient",
             "-resize",
-            "250%",
+            "3500x3500>",
             "-colorspace",
             "Gray",
             "-threshold",

@@ -7,8 +7,11 @@ import sys
 from pathlib import Path
 
 from banca_revista.archive import ConversionError, convert_rar_to_cbz, inspect_rar
+from banca_revista.batch import DEFAULT_WORKERS, next_report_path, run_batch, save_report
+from banca_revista.cbr import convert_to_cbr
 from banca_revista.metadata import ComicMetadata, create_metadata_cbr, metadata_from_ocr
 from banca_revista.ocr import analyze_cbr
+from banca_revista.pipeline import process_to_library
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -51,6 +54,45 @@ def build_parser() -> argparse.ArgumentParser:
     enrich_parser.add_argument("--author", help="substitui a grafia de autor devolvida pelo catálogo")
     enrich_parser.add_argument("--publisher", help="substitui a editora da edição associada ao ISBN")
     enrich_parser.add_argument("--tag", action="append", default=[])
+
+    to_cbr_parser = subcommands.add_parser("to-cbr", help="converte PDF ou ZIP em um novo CBR")
+    to_cbr_parser.add_argument("source", type=Path)
+    to_cbr_parser.add_argument("output", type=Path)
+    to_cbr_parser.add_argument(
+        "--pdf-mode",
+        choices=("auto", "lossless", "render"),
+        default="auto",
+        help="estratégia para PDF (padrão: auto)",
+    )
+    to_cbr_parser.add_argument("--dpi", type=int, default=200, help="resolução do modo render (padrão: 200)")
+
+    batch_parser = subcommands.add_parser(
+        "batch-to-cbr",
+        help="converte PDF/ZIP/CBZ e processa todos os CBRs de uma pasta",
+    )
+    batch_parser.add_argument("base", type=Path)
+    batch_parser.add_argument("output_dir", type=Path)
+    batch_parser.add_argument("--execute", action="store_true", help="executa o plano; sem esta opção apenas simula")
+    batch_parser.add_argument("--report", type=Path, help="arquivo JSON do relatório durante a execução")
+    batch_parser.add_argument(
+        "--workers",
+        type=int,
+        default=DEFAULT_WORKERS,
+        help=f"quantidade de processos paralelos (padrão: {DEFAULT_WORKERS})",
+    )
+    batch_parser.add_argument(
+        "--no-lookup-isbn",
+        action="store_true",
+        help="não consulta o catálogo NDL pelos ISBNs encontrados",
+    )
+
+    process_parser = subcommands.add_parser(
+        "process",
+        help="normaliza, aplica OCR/metadados e publica um CBR",
+    )
+    process_parser.add_argument("source", type=Path)
+    process_parser.add_argument("output", type=Path)
+    process_parser.add_argument("--no-lookup-isbn", action="store_true")
     return parser
 
 
@@ -83,6 +125,40 @@ def main() -> int:
             )
             output = create_metadata_cbr(args.source, args.output, metadata)
             print(f"CBR enriquecido criado: {output}")
+            return 0
+        if args.command == "to-cbr":
+            result = convert_to_cbr(args.source, args.output, pdf_mode=args.pdf_mode, dpi=args.dpi)
+            print(f"CBR criado: {result.output}")
+            print(f"origem detectada: {result.input_format}")
+            print(f"estratégia: {result.strategy}")
+            print(f"páginas: {result.page_count}")
+            print(f"capa: {result.first_page}")
+            return 0
+        if args.command == "batch-to-cbr":
+            report = run_batch(
+                args.base,
+                args.output_dir,
+                dry_run=not args.execute,
+                lookup_isbn=not args.no_lookup_isbn,
+                workers=args.workers,
+            )
+            print(report.to_json())
+            if args.execute:
+                report_path = args.report or next_report_path(args.output_dir)
+                saved = save_report(report, report_path)
+                print(f"relatório salvo: {saved}")
+            return 0
+        if args.command == "process":
+            result = process_to_library(
+                args.source,
+                args.output,
+                lookup_isbn=not args.no_lookup_isbn,
+            )
+            print(f"CBR processado: {result.output}")
+            print(f"estratégia: {result.strategy}")
+            print(f"páginas: {result.page_count}")
+            if result.warnings:
+                print(f"avisos: {' | '.join(result.warnings)}")
             return 0
 
         inspection = inspect_rar(args.source)
