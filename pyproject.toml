@@ -1,0 +1,32 @@
+[build-system]
+requires = ["uv_build>=0.9.18,<0.13.0"]
+build-backend = "uv_build"
+
+[project]
+name = "banca-revista"
+version = "0.1.0"
+description = "Diagnóstico e normalização de arquivos de quadrinhos para o Calibre"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = []
+
+[dependency-groups]
+dev = [
+    "pytest>=8.4,<10",
+    "ruff>=0.14,<0.16",
+]
+
+[tool.pytest.ini_options]
+addopts = "-ra"
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "PTH", "RUF"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"

@@ -1,0 +1,13 @@
+#:schema https://developers.openai.com/codex/config-schema.json
+
+# Mantém comandos do agente isolados no repositório. A publicação futura em
+# ~/banca deve continuar sujeita a autorização explícita.
+sandbox_mode = "workspace-write"
+approval_policy = "on-request"
+
+[sandbox_workspace_write]
+network_access = false
+
+[agents]
+enabled = true
+max_concurrent_threads_per_session = 3

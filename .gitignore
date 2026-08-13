@@ -209,6 +209,16 @@ tempCodeRunnerFile.py
 # PyPI configuration file
 .pypirc
 
+# Arquivos de quadrinhos e artefatos locais do projeto
+*.cb7
+*.cbr
+*.cbz
+*.cbc
+*.rar
+*.zip
+*.7z
+.banca-revista/
+
 # Marimo
 marimo/_static/
 marimo/_lsp/
