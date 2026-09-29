@@ -1,0 +1,42 @@
+{
+  // Padrão compartilhado de markdown (origem: repositórios laboratorio e parquet-digital).
+  // Pinned to the schema shipped with markdownlint-cli2 v0.23.2.
+  "$schema": "https://raw.githubusercontent.com/DavidAnson/markdownlint-cli2/v0.23.2/schema/markdownlint-cli2-config-schema.json",
+
+  "config": {
+    "default": true,
+
+    // Mesmo limite de linha do Ruff (120), sem forçar quebra em blocos de código, tabelas e headings.
+    "MD013": {
+      "line_length": 120,
+      "headings": false,
+      "code_blocks": false,
+      "tables": false
+    },
+
+    // CHANGELOG repete "### Adicionado"/"### Corrigido" em cada versão; só acusar repetição entre irmãos.
+    "MD024": { "siblings_only": true },
+
+    // Listas numeradas que continuam após tabela/bloco de código (ex.: "4." depois de uma tabela) são intencionais;
+    // o --fix renumeraria para "1." e mudaria a numeração renderizada.
+    "MD029": false,
+
+    // Seções recolhíveis (<details>/<summary>) são suportadas pelo GitLab e pelo MkDocs;
+    // <br> é o único jeito de quebrar linha dentro de célula de tabela.
+    "MD033": { "allowed_elements": ["details", "summary", "br"] },
+
+    // Tabelas alinhadas, compactas ou justas são aceitas, desde que cada tabela seja consistente.
+    "MD060": { "style": "any" }
+  },
+
+  // Respeita arquivos gerados e dependências locais já ignorados pelo Git.
+  "gitignore": true,
+
+  "globs": ["**/*.md"],
+  "ignores": [
+    "**/.venv/**",
+    "**/node_modules/**",
+    "htmlcov/**",
+    "**/graphify-out/**"
+  ]
+}
