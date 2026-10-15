@@ -241,3 +241,44 @@ def test_cli_simulation_prints_plan_and_changes_nothing(
     assert "simulação" in out
     assert "flatpak install --user" in out
     assert not home.exists()
+
+
+VENDORED_PLUGIN = Path(__file__).resolve().parents[1] / "koreader" / "panelsplus"
+
+
+def changed_lines(diff_text: str) -> list[str]:
+    """Linhas adicionadas/removidas de um diff unificado, sem cabeçalhos."""
+    return sorted(line for line in diff_text.splitlines() if line[:1] in "+-" and not line.startswith(("+++", "---")))
+
+
+def test_bundled_patch_matches_vendored_plugin_source(tmp_path: Path) -> None:
+    """O patch empacotado é exatamente a diferença entre a v1.4.0 e `koreader/panelsplus/`."""
+    patch = PANELSPLUS.patch
+    touched = [
+        line.split(" ", 1)[1].split("/", 1)[1] for line in patch.read_text().splitlines() if line.startswith("+++ ")
+    ]
+    assert touched
+    original = tmp_path / "a"
+    for name in touched:
+        target = original / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes((VENDORED_PLUGIN / name).read_bytes())
+
+    reverted = subprocess.run(
+        ["patch", "-R", "-p1", "--batch", "--fuzz=0", "--no-backup-if-mismatch", "-d", str(original), "-i", str(patch)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert reverted.returncode == 0, reverted.stdout + reverted.stderr
+
+    current_diff = "".join(
+        subprocess.run(
+            ["diff", "-u", str(original / name), str(VENDORED_PLUGIN / name)],
+            capture_output=True,
+            text=True,
+            check=False,
+        ).stdout
+        for name in touched
+    )
+    assert changed_lines(current_diff) == changed_lines(patch.read_text())

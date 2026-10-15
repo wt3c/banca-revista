@@ -37,6 +37,8 @@
     "**/.venv/**",
     "**/node_modules/**",
     "htmlcov/**",
-    "**/graphify-out/**"
+    "**/graphify-out/**",
+    // Código de terceiros vendorizado: mantido idêntico à origem (ver koreader/README.md).
+    "koreader/panelsplus/**"
   ]
 }

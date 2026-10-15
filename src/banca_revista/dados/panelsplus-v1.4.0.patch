@@ -1,7 +1,7 @@
-diff --git i/main.lua w/main.lua
+diff --git a/main.lua b/main.lua
 index eb380ee..f961c15 100644
---- i/main.lua
-+++ w/main.lua
+--- a/main.lua
++++ b/main.lua
 @@ -69,6 +69,7 @@ function PanelsPlus:init()
      self.ui.menu:registerToMainMenu(self)
      self:onDispatcherRegisterActions()
@@ -18,10 +18,10 @@ index eb380ee..f961c15 100644
  
      local ok, ComponentDetector = pcall(require, "src._componentdetector")
      if ok and ComponentDetector.clearScratch then
-diff --git i/src/_panelviewer.lua w/src/_panelviewer.lua
+diff --git a/src/_panelviewer.lua b/src/_panelviewer.lua
 index 0536166..0c22d7e 100644
---- i/src/_panelviewer.lua
-+++ w/src/_panelviewer.lua
+--- a/src/_panelviewer.lua
++++ b/src/_panelviewer.lua
 @@ -1698,7 +1698,7 @@ function PanelViewer:animateSwitchToImageNum(target)
      -- smaller viewport. Match that smaller destination scale here as well, or
      -- ImageWidget clamps the camera to the full-size canvas and the animation
@@ -105,10 +105,10 @@ index 0536166..0c22d7e 100644
  end
  
  --- Shrink the box ImageViewer renders the panel into, for "margin" crop mode.
-diff --git i/src/_settings.lua w/src/_settings.lua
+diff --git a/src/_settings.lua b/src/_settings.lua
 index 2686530..fd12f7e 100644
---- i/src/_settings.lua
-+++ w/src/_settings.lua
+--- a/src/_settings.lua
++++ b/src/_settings.lua
 @@ -12,7 +12,7 @@ local Settings = {
      },
      defaults = {
@@ -118,10 +118,10 @@ index 2686530..fd12f7e 100644
          crop_mode = "strict",
          panel_margin_ratio = 0.12,
          invert_swipe = false,
-diff --git i/src/native_panel_zoom.lua w/src/native_panel_zoom.lua
+diff --git a/src/native_panel_zoom.lua b/src/native_panel_zoom.lua
 index 77e449f..2106180 100644
---- i/src/native_panel_zoom.lua
-+++ w/src/native_panel_zoom.lua
+--- a/src/native_panel_zoom.lua
++++ b/src/native_panel_zoom.lua
 @@ -36,6 +36,58 @@ function NativePanelZoom:patchNativePanelZoom()
      end
  end

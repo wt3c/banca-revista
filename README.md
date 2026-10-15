@@ -149,6 +149,8 @@ qualquer falha o plugin já instalado permanece intacto. Um plugin existente é 
 `~/.var/app/rocks.koreader.KOReader/config/koreader/plugins.bak/` antes da troca. Para testar contra o GitHub real:
 `BANCA_TESTE_REDE=1 uv run pytest tests/test_leitor.py`.
 
+O código-fonte do plugin adaptado, com testes em Lua, está em [`koreader/`](koreader/README.md).
+
 ## Documentação
 
 - [Diagnóstico de capas ausentes em CBR e CBZ](docs/calibre-capas-cbr-cbz.md)

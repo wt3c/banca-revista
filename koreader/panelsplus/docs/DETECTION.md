@@ -1,0 +1,460 @@
+# Panel detection
+
+How Panels+ decides where the panels on a page are, why there are two detector
+modes and two source backends, and which knobs change the result.
+
+See also: [MODES.md](MODES.md) for the reader-facing names of the modes this
+document describes, [ARCHITECTURE.md](ARCHITECTURE.md),
+[PERFORMANCE.md](PERFORMANCE.md).
+
+## Two source backends: Native and Embedded
+
+The format determines the source backend; **Quick**, **Smart**, and **Deep**
+remain the reader-facing detector modes in both cases.
+
+| Backend | Formats | Deep input | Coordinate space |
+| --- | --- | --- | --- |
+| **Native detection** | CBZ, CBR, PDF, DjVu, and other fixed-layout documents | The document backend renders the fixed page into KOPT | Native document-page coordinates |
+| **Embedded detection** | EPUB, KEPUB, MOBI, and reflowable documents with an extracted image | Panels+ copies that decoded image into KOPT | Extracted-image coordinates |
+
+Deep uses one shared KOPT/Leptonica implementation for both backends. It builds
+the grayscale image, applies KOReader's threshold, and finds 8-connected
+components **once**, then returns every qualifying panel rectangle. The older
+KOReader API repeats that complete work once per probe point. Thus improvements
+to the shared Deep collector, its component filter, or its ordering benefit
+both Native and Embedded detection; document rendering and image extraction
+remain backend-specific.
+
+If direct Leptonica access is missing in an older KOReader build, Panels+ falls
+back safely to KOReader's original per-probe method.
+
+## Active Detector: ComponentDetector (`components`)
+
+Panels+ defaults to the high-accuracy **Component Detector** (`src/_componentdetector.lua`). It combines the fast background-relative binary ink map from `_pagebitmap.lua` with 8-connected flood-fill component analysis and straight-line boundary verification. 
+
+| Method | Component Detector (`components`) | Legacy Segmenter (`fast`) | Native K2pdfopt (`exact`) |
+| --- | --- | --- | --- |
+| Cost per page | One render at ~1/2 or ~1/3 scale (~5-10ms) | One render at ~1/3 scale | Full-res rasterization (slow) |
+| Dark / inverted backgrounds | **Works** (measured background) | **Works** | **Fails** (assumes white) |
+| Tilted & slanted gutters | **Works** (traces connected strokes) | Limited (shear search up to ~6°) | **Fails** |
+| Precision on Manga | **> 96%** (96.4% Bloom, 98.6% Kobayashi) | ~70–75% | Variable |
+| Dialogue & face filtering | **Filtered** (straight-edge support + containment) | Gutter-dependent | Probe-point dependent |
+| Sparse / blank pages | **Full-page fallback** | Exits or collapses | Exits or collapses |
+
+### Why the KOReader detector can't see a dark page
+
+`KoptInterface:getPanelFromPage` thresholds against *white* — the k2pdfopt code
+behind it looks for blank light-coloured bands and treats them as the gaps
+between panels. It has a white threshold and no inverse, and there is no way to
+hand it a pre-inverted bitmap.
+
+So on a page printed white-on-black there are no white gutters to find, and
+detection collapses. This is not a tuning problem; it needs a different detector.
+
+## The Component Detector Pipeline (Default)
+
+```mermaid
+flowchart TD
+    START(["collect(page)"]) --> BITMAP["build binary ink map<br/><i>_pagebitmap.lua</i>"]
+    BITMAP -->|failed| NATIVE["fallback: NativeDetector<br/><i>_nativedetector.lua</i>"]
+    
+    BITMAP -->|success| CC["8-connected flood fill<br/><i>collectComponents</i>"]
+    CC --> CONTAIN["suppress interior contained regions"]
+    CC --> SIDES["lineSupport & frameSides<br/>check straight-edge support"]
+    
+    CONTAIN --> FILTER["filter out speech bubbles & faces<br/>(require 4-sided frame for small boxes)"]
+    SIDES --> FILTER
+    
+    FILTER --> MERGE["merge adjacent floating artwork"]
+    MERGE --> ACCEPT{"Segmenter.accept"}
+    
+    ACCEPT -->|pass| SORT["sort reading order (manga / comic)<br/><i>_geometry.lua</i>"]
+    ACCEPT -->|fail / empty| FULL["full page fallback<br/><i>PanelCollector.fullPage</i>"]
+    
+    SORT --> DONE(["ordered panels"])
+    FULL --> DONE
+    NATIVE --> DONE
+
+    style BITMAP fill:#2d6cdf,color:#fff
+    style CC fill:#8a5cf6,color:#fff
+    style SIDES fill:#3fa45b,color:#fff
+    style ACCEPT fill:#e8a33d,color:#000
+    style FULL fill:#f97316,color:#fff
+```
+
+### 1. 8-Connected Component Search
+Rather than cutting gutters with projection histograms, the detector traverses contiguous foreground ink in an 8-connected grid. This inherently preserves tilted borders, narrow dividing lines, and asymmetrical panels.
+
+### 2. Multi-Sample Straight Line Boundary Support (`frameSides`)
+Real panels are bounded by straight line segments, whereas speech bubbles, character heads, and organic illustrations have curved contours. Along each of the 4 bounding box edges, `lineSupport` samples pairs of points across multiple spans to fit lines with slopes up to ±0.35. A side is accepted as a true frame side only if >= 80% of its extent lies within tolerance of the fitted line.
+
+### 3. Containment & Size Suppression
+- Regions occurring completely inside a larger panel are filtered out (`keep = false`).
+- Candidates smaller than 10% page width, 10% page height, or 1% total area must have evidence of all 4 frame sides or pass `hasFrame` perimeter sampling.
+
+### 4. Continuous Sequence Handling (`fullPage`)
+If no valid panels are detected (e.g. on blank pages, chapter splash covers, or unbordered art), `PanelCollector.fullPage` yields a single panel covering the whole page dimensions so the zoom viewer stays smoothly open.
+
+### 5. Zero-Allocation Reusable Scratch Buffers (Low-RAM Device Optimization)
+On memory-constrained hardware (e.g. older Kindles and Kobos with ~300MB RAM), allocating multi-megabyte FFI arrays on every page turn creates severe GC pressure and UI lag:
+- **Persistent BFS Queues & Visited Maps**: `scratch_seen` and `scratch_queue` are allocated once and resized only if page dimensions exceed capacity. Visited grids are reset in < 0.5ms via native C `memset` (`ffi.fill`).
+- **Static Boundary Profiles**: Frame analysis (`scratch_left`, `scratch_right`, `scratch_top`, `scratch_bottom`) uses persistent 1D `int32_t` arrays, eliminating thousands of short-lived Lua table allocations per page.
+- **Early-Exit Straight Line Fitting**: `lineSupport` terminates as soon as 80% straight-edge evidence is verified, skipping up to 90% of candidate slope computations.
+- **Explicit Teardown Reclaim**: `ComponentDetector.clearScratch()` is invoked on document close (`PanelsPlus:onCloseWidget()`) to release scratch memory immediately when returning to the library or reading text documents.
+
+---
+
+## Legacy: The Segmenter Pipeline (`fast`)
+
+    BLOCK -->|yes| NATIVE
+    BLOCK -->|no| RENDER["render page at ~1/3 scale<br/><i>_pagebitmap.lua</i>"]
+
+    RENDER --> BG["read the page border,<br/>take each RGB channel's median<br/>= background"]
+    BG --> BIN["mark every cell whose largest RGB-channel<br/>difference from the background exceeds<br/>segment_ink_delta"]
+    BIN --> CUT["recursive X-Y cut<br/><i>_segmenter.lua</i>"]
+    CUT --> ACCEPT{"Segmenter.accept"}
+
+    ACCEPT -->|trustworthy| SORT["sort into reading order"]
+    ACCEPT -->|not trustworthy| FB{"detector setting"}
+    FB -->|fast| EMPTY(["no panels"])
+    FB -->|auto| NATIVE["Exact: KOReader detector,<br/>batched over one rasterization<br/><i>_nativedetector.lua</i>"]
+
+    NATIVE --> SORT
+    SORT --> DONE(["ordered panels"])
+
+    style RENDER fill:#2d6cdf,color:#fff
+    style BG fill:#8a5cf6,color:#fff
+    style ACCEPT fill:#e8a33d,color:#000
+```
+
+### Background is measured, not assumed
+
+This one step is what makes dark pages work. The outer ~1% ring of the page is
+its own paper or its inked backdrop — never panel content — so the per-channel
+median of that ring is a reliable reference for what "empty" looks like on
+*this* page.
+
+Everything downstream is then relative:
+
+```
+ink  ⇔  max(|red − bg.red|, |green − bg.green|, |blue − bg.blue|) > segment_ink_delta
+```
+
+A white page marks dark strokes as ink; a black page marks light strokes as
+ink. A solid coloured page also works, including when its panels have nearly
+the same luminance but a different hue. **All three produce a useful binary
+map.**
+
+### The recursive X-Y cut
+
+Comic pages are laid out as nested bands: a page splits into tiers, a tier splits
+into panels, and the separators are gutters of bare background. Slicing on the
+widest empty band, over and over, reproduces exactly that structure.
+
+For each region: count ink per row and per column, trim to the ink bounding box,
+find the widest *interior* run of near-empty lines, split there, and recurse.
+
+```mermaid
+flowchart TD
+    P["whole page"] --> P1["tier 1"]
+    P --> P2["tier 2"]
+    P --> P3["tier 3"]
+
+    P1 --> L1["panel"]
+    P2 --> L2["panel"]
+    P2 --> L3["panel"]
+    P2 --> L4["panel"]
+    P3 --> L5["panel"]
+
+    P -.->|"horizontal gutters"| P2
+    P2 -.->|"vertical gutters"| L3
+
+    style P fill:#2d6cdf,color:#fff
+    style L1 fill:#3fa45b,color:#fff
+    style L2 fill:#3fa45b,color:#fff
+    style L3 fill:#3fa45b,color:#fff
+    style L4 fill:#3fa45b,color:#fff
+    style L5 fill:#3fa45b,color:#fff
+```
+
+Three details matter more than they look:
+
+- **Interior gutters only.** A run of empty lines touching the edge of a region is
+  a margin, not a separator between two siblings. Splitting there produces one
+  empty half. Margins are removed by the trim step instead.
+- **Near-empty, not empty.** A line counts as gutter if its ink is at or below
+  `segment_gutter_ink_ratio` of the region's width. Scan noise, JPEG ringing and
+  dust would otherwise turn every real gutter into a non-gutter.
+- **Horizontal splits win ties.** Tiers stack vertically far more often than
+  panels sit in full-height columns, so preferring row cuts on equal-width
+  gutters follows the usual page structure.
+
+Rectangles come back in map cells and are scaled to native page coordinates, then
+grown by one cell in every direction: at 1/3 scale a single cell is several page
+pixels, and without the margin the crop shaves the outermost artwork.
+
+## Knowing when the cut is wrong
+
+An X-Y cut can only separate panels a straight line can separate. Diagonal splits
+and interlocking layouts have no such line. `Segmenter.accept()` catches those so
+the result is handed to the other detector instead of shown as-is:
+
+```mermaid
+flowchart TD
+    IN["segmented panels"] --> N{"how many?"}
+
+    N -->|0| R0(["reject: nothing found"])
+    N -->|1| ONE{"covers ≥ segment_single_panel_ratio<br/>of the page?"}
+    N -->|"2 or more"| SPAN{"panels span ≥ segment_page_coverage_min<br/>of the page?"}
+
+    ONE -->|yes| A1(["accept: splash page,<br/>or a page with no straight gutters"])
+    ONE -->|no| R1(["reject: found one blob,<br/>missed the rest"])
+
+    SPAN -->|no| R2(["reject: only found a corner"])
+    SPAN -->|yes| KEEP{"panels retain ≥ segment_coverage_min<br/>of the area they span?"}
+    KEEP -->|no| R3(["reject: too much dropped as noise"])
+    KEEP -->|yes| A2(["accept"])
+
+    style A1 fill:#3fa45b,color:#fff
+    style A2 fill:#3fa45b,color:#fff
+    style R0 fill:#d9534f,color:#fff
+    style R1 fill:#d9534f,color:#fff
+    style R2 fill:#d9534f,color:#fff
+    style R3 fill:#d9534f,color:#fff
+```
+
+The single-panel branch is deliberately generous. One rectangle spanning most of
+the page is the right answer twice over: it is what a splash page *is*, and it is
+also the best either detector can do on a page with no straight gutters. Falling
+back there would spend a full-resolution render to arrive at the same rectangle.
+A lone *small* rectangle is a different story and does get a second opinion.
+
+## The native detector, batched
+
+When the segmenter declines, `_nativedetector.lua` runs KOReader's detector — but
+not the way KOReader does.
+
+`Document:getPanelFromPage()` is the only uncached probe in `KoptInterface`:
+every call builds a context, rasterizes the whole page at full resolution, probes
+one point, and discards the rasterization. Probing a grid that way costs one page
+render per point.
+
+Panels+ drives the same primitives with the loop moved inside the rasterization:
+
+```mermaid
+flowchart LR
+    subgraph before ["KOReader: one render per probe"]
+        direction TB
+        B1["render page"] --> B2["probe 1"] --> B3["render page"] --> B4["probe 2"] --> B5["render page"] --> B6["probe 3 …"]
+    end
+
+    subgraph after ["Panels+: one render per page"]
+        direction TB
+        A1["render page"] --> A2["probe 1"] --> A3["probe 2"] --> A4["probe 3 …"]
+    end
+
+    style B1 fill:#d9534f,color:#fff
+    style B3 fill:#d9534f,color:#fff
+    style B5 fill:#d9534f,color:#fff
+    style A1 fill:#3fa45b,color:#fff
+```
+
+Probes run in a reading-order-aware plan — the hold position first, then the page
+centre, then likely reading-path cells, then the full grid — and any point
+already inside a discovered panel is skipped.
+
+If building the shared context fails for any reason, the module falls back to
+KOReader's own entry point — one full-resolution render per probe, up to the
+whole grid. Both the shared-context attempt and that fallback are skipped
+outright when free memory is below `native_detect_min_free_bytes`: a
+full-resolution rasterization is this plugin's single largest allocation, and
+retrying with ~29 of them right after one already failed is how a
+low-memory device goes from tight to OOM-killed. When skipped, the page is
+reported as having no panels, the same outcome as a segmenter rejection with
+no native fallback available.
+
+## Tuning
+
+All values live in `src/_settings.lua`. Existing installs pick up new defaults
+through `performance_profile_version`.
+
+| Setting | Default | Effect |
+| --- | --- | --- |
+| `detector` | `"auto"` | `auto` fast with fallback, `fast` only, `exact` only. Also on the viewer's mode button — see [MODES.md](MODES.md) |
+| `segment_target_width` | `480` | Ink-map width. See the note below before changing it |
+| `segment_ink_delta` | `40` | Luminance distance from background counted as ink. Raise for noisy scans, lower for faint art |
+| `segment_gutter_ratio` | `0.005` | Shortest gutter, as a fraction of the map's smaller side. Raise if panels are being over-split |
+| `segment_gutter_ink_ratio` | `0.005` | Ink a line may carry and still count as empty. Raise for dusty scans |
+| `segment_min_panel_area` | `0.005` | Smallest panel, as a fraction of page area. Rejects specks |
+| `segment_min_panel_side` | `0.03` | Smallest panel side. Rejects slivers |
+| `segment_sliver_aspect` | `4` | Long-to-short side ratio past which a panel is checked for content — see below |
+| `segment_sliver_ink` | `0.02` | Least share of the page's ink such an elongated panel must hold |
+| `segment_border_split` | `false` | Comic mode: split panels on drawn border strokes. Experimental — see below |
+| `segment_border_luminance_max` | `60` | Luminance at/below which a cell is a border-stroke candidate |
+| `segment_border_line_ratio` | `0.97` | Share of a line that must be border cells to count as a drawn separator |
+| `segment_border_width_ratio` | `0.01` | Widest run still read as a stroke rather than a filled panel interior |
+| `segment_max_depth` | `6` | Recursion limit, so up to 64 panels |
+| `segment_max_panels` | `40` | Hard cap per page |
+| `segment_coverage_min` | `0.5` | Least share of the spanned area the panels must retain |
+| `segment_page_coverage_min` | `0.4` | Least share of the page the panels must span |
+| `segment_single_panel_ratio` | `0.6` | Least share of the page a lone panel must cover to be believed |
+| `segment_shear` | `true` | Look for slanted gutters when no straight one exists |
+| `segment_shear_max_depth` | `4` | Deepest recursion level allowed to search for slanted gutters |
+| `segment_shear_trigger` | `0.35` | How empty a line must already be before a slanted search is worth running |
+| `segment_shear_step` | `2` | Sample every Nth line during a slanted search |
+| `panel_grid_cols` / `panel_grid_rows` | `4` / `7` | Native detector probe grid |
+| `native_detect_min_free_bytes` | `100MB` | Free memory below which native K2PDFOpt detection is skipped entirely |
+| `panel_bleed_ratio` / `panel_bleed_min` | `0.08` / `8` | Crop padding in loose crop mode |
+
+### Resolution and gutter width are one setting, not two
+
+`segment_gutter_ratio` is a fraction of the **map**, so it stays a fixed fraction
+of the *page* no matter what resolution the map is built at. Raising
+`segment_target_width` on its own therefore detects no extra gutters — the
+minimum gutter grows in cells by exactly as much as the map does.
+
+Both have to move together. Measured against rendered pages with 4px panel
+borders and a realistic ink distribution, splitting a row of three panels:
+
+| Map width | `gutter_ratio` | Minimum gutter | Narrowest gutter split |
+| --- | --- | --- | --- |
+| 320 | 0.012 | ~15px | 24px |
+| 320 | 0.005 | ~10px | 16px |
+| 480 | 0.012 | ~17px | 24px |
+| **480** | **0.005** | **~7px** | **8px** |
+| 640 | 0.006 | ~8px | 8px |
+
+480 / 0.005 is the default: it splits every gutter width tested without
+over-splitting splash pages, grids or full-height columns, at 2.25× the scan
+cost of 320. 640 buys nothing extra for 4× the cost.
+
+### Panels that are not square
+
+Panel edges are rarely drawn exactly square, and the straight cut is far less
+tolerant of that than it looks: a gutter tilted by **two degrees** already leaves
+no column empty from top to bottom, so a row of panels comes back grouped.
+
+When no straight gutter is found, the cut projects along slanted lines instead,
+over a ladder of 2 to 8 degrees either way:
+
+```mermaid
+flowchart TD
+    S["no straight gutter in this region"] --> T{"is any line<br/>already part-empty?"}
+    T -->|no| L["emit as one panel<br/><i>a splash page can never<br/>yield a slanted gutter</i>"]
+    T -->|yes| P["project along slanted lines,<br/>last working slope first"]
+    P --> G{"gutter found?"}
+    G -->|no, try next slope| P
+    G -->|yes| SP["split on the band's FULL extent,<br/>both sides get the whole band"]
+    SP --> R["each panel keeps all its own art<br/>plus a thin wedge of its neighbour"]
+
+    style P fill:#2d6cdf,color:#fff
+    style SP fill:#8a5cf6,color:#fff
+    style L fill:#3fa45b,color:#fff
+```
+
+Three details carry this:
+
+- **Every candidate is tried, not just the widest.** Projecting a slanted band
+  back onto the axis widens it by the drift, which often makes the widest
+  candidate unusable while a narrower one is fine. Taking only the widest also
+  made the search keep re-finding the gutter it had just split on.
+- **Both children get the whole band.** Splitting at the band's inner edge would
+  shave a corner off each panel; giving both the full band means a thin wedge of
+  the neighbour shows instead, which reads as ordinary panel bleed.
+- **The search is gated.** It only runs when some line already looks part-empty,
+  so pages that can never produce a slanted gutter skip it entirely.
+
+Measured on rendered pages, a row of three splits correctly from 0 to 6 degrees.
+At 7 to 8 degrees it tends to over-split, producing one panel too many rather
+than one grouped blob.
+
+Ink tolerance is deliberately *not* loosened for this search. Loosening it was
+tried and collapsed 22 of 23 test layouts, exactly as it does for straight cuts.
+
+### Page furniture is not a panel
+
+Size floors alone do not describe a panel. A scanlation credit strip, a footer
+rule, a row of page furniture — all of them clear `segment_min_panel_area` and
+`segment_min_panel_side` comfortably. At 182×20 cells on a 480×720 map a credit
+line is 3640 cells against a 1728-cell area floor, and both its sides beat the
+14-cell side floor. It would then be shown to the reader as a panel holding no
+artwork.
+
+Neither half of what gives it away is enough on its own:
+
+| Leaf | Ink share | Aspect | |
+| --- | --- | --- | --- |
+| credit strip 182×20 | 0.96% | 9.1:1 | furniture |
+| inset panel 60×60 | 1.51% | 1:1 | panel |
+| letterbox panel 458×60 | 7.95% | 7.6:1 | panel |
+| strip panel 40×600 | 6.94% | 15:1 | panel |
+
+An ink floor on its own would take the inset panel before it took the credit
+strip. An aspect limit on its own would take both legitimately elongated
+panels. Only the **conjunction** isolates furniture: a leaf is rejected when it
+is *both* stretched past `segment_sliver_aspect` **and** holds less than
+`segment_sliver_ink` of the page's ink. That is what a strip of page furniture
+is, and what none of the real panels are.
+
+The ink floor is deliberately a *share* of the page rather than an absolute
+count, so a mostly-blank page with one small drawing still gives that drawing
+~100% of the page's ink and keeps it.
+
+### Known limitation: panels with no gutter
+
+Some pages separate panels with a single shared border line and no background
+gap at all. There is no empty band to find, so the cut merges them — and the
+native detector, which also looks for blank bands, cannot split them either.
+Such a row is returned as one panel.
+
+Comic mode can try to split on that drawn stroke instead of a blank band, under
+**Panels+ → Panel detection → "Split on drawn panel borders"**. It is off by
+default, and the reason is worth stating plainly: **the pattern is not unique to
+a panel border.** A stroke shared between two bled panels and a black line drawn
+*through* a single panel — a horizon, a caption rule, a pole, a letterbox band —
+both appear in the ink map as a thin, full-span, densely dark run flanked by
+artwork. Nothing left in the map tells them apart, so no amount of tuning
+separates the two.
+
+That makes it a straight trade, not a bug to be fixed:
+
+| | Off (default) | On |
+| --- | --- | --- |
+| Bled panels | merged into one | split correctly |
+| Panel with a drawn black line | intact | **cut in half** |
+
+Off is the default because a merged pair still shows the reader all the
+artwork, while a panel cut in half does not — and drawn black lines are far more
+common than fully bled layouts. Turn it on if your particular comic leans the
+other way.
+
+## Diagnosing a page
+
+Turn on **Panels+ → Log panel timings** and reopen the page, and you'll see
+which path ran and, when the segmenter declines, why. This goes through
+KOReader's own `logger.info`, so you'll find it in KOReader's log —
+`crash.log`, next to your KOReader install directory, not anywhere inside the
+Panels+ plugin folder. Every line this plugin emits starts with the prefix
+`[Panels+]`, so you can grep/filter the logs easily — e.g.
+`grep '\[Panels+\]' crash.log`. See
+[PERFORMANCE.md → Measuring on your device](PERFORMANCE.md#measuring-on-your-device)
+for more on the log format and where `crash.log` lives on each platform.
+
+```
+[Panels+] page bitmap 74ms (480x720 rgb24 bg=12,12,12 inverted ink=38%)
+[Panels+] segment 48ms (6 panels)
+```
+
+`bg=12 inverted` confirms the page was read as dark-background. A rejection looks
+like:
+
+```
+[Panels+] segmenter rejected: single partial panel
+[Panels+] native detect 780ms (5 panels from 29 probes, 1 page render)
+```
+
+If a page detects badly, the setting to reach for first is `detector` — or,
+from an open panel, the mode button described in
+[MODES.md](MODES.md#where-to-change-it). Forcing Gutter (`fast`) or Outline
+(`exact`) tells you immediately which one is misreading the page, before you
+touch any tuning value in the table above.
