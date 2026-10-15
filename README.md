@@ -128,6 +128,27 @@ uv run banca-revista batch-to-cbr --json
 uv run banca-revista batch-to-cbr --execute --json
 ```
 
+### Leitor KOReader com visão por quadros
+
+Instala o KOReader via Flatpak (escopo do usuário, sem `sudo`) e o plugin
+[Panels+](https://github.com/KristanLaimon/PanelsPlus) v1.4.0 com o patch de
+`src/banca_revista/dados/panelsplus-v1.4.0.patch`:
+
+- duplo clique sobre um quadro abre a visão quadro a quadro (estilo Kindle);
+- todos os quadros usam o mesmo zoom, o que ajusta a largura da página à janela, e quadros maiores são reduzidos só
+  o necessário para caber;
+- leitura da esquerda para a direita por padrão (mangás podem ser trocados por livro no menu do plugin).
+
+```bash
+uv run banca-revista instalar-leitor --simular
+uv run banca-revista instalar-leitor
+```
+
+Requer `flatpak` e `patch`. O zip do release é conferido por SHA-256 e o patch precisa aplicar sem aproximação; em
+qualquer falha o plugin já instalado permanece intacto. Um plugin existente é movido para
+`~/.var/app/rocks.koreader.KOReader/config/koreader/plugins.bak/` antes da troca. Para testar contra o GitHub real:
+`BANCA_TESTE_REDE=1 uv run pytest tests/test_leitor.py`.
+
 ## Documentação
 
 - [Diagnóstico de capas ausentes em CBR e CBZ](docs/calibre-capas-cbr-cbz.md)

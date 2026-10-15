@@ -1,0 +1,183 @@
+diff --git i/main.lua w/main.lua
+index eb380ee..f961c15 100644
+--- i/main.lua
++++ w/main.lua
+@@ -69,6 +69,7 @@ function PanelsPlus:init()
+     self.ui.menu:registerToMainMenu(self)
+     self:onDispatcherRegisterActions()
+     self:patchNativePanelZoom()
++    self:registerDoubleTapPanelZoom()
+     self:applyNativePanelSetting()
+ end
+ 
+@@ -474,6 +475,7 @@ function PanelsPlus:onCloseWidget()
+     self:cancelPanelPrerender()
+     self:clearPanelCache()
+     self:restoreNativePanelZoom()
++    self:unregisterDoubleTapPanelZoom()
+ 
+     local ok, ComponentDetector = pcall(require, "src._componentdetector")
+     if ok and ComponentDetector.clearScratch then
+diff --git i/src/_panelviewer.lua w/src/_panelviewer.lua
+index 0536166..0c22d7e 100644
+--- i/src/_panelviewer.lua
++++ w/src/_panelviewer.lua
+@@ -1698,7 +1698,7 @@ function PanelViewer:animateSwitchToImageNum(target)
+     -- smaller viewport. Match that smaller destination scale here as well, or
+     -- ImageWidget clamps the camera to the full-size canvas and the animation
+     -- appears stationary before snapping to the margin-sized panel.
+-    local target_margin_factor = self:getMarginShrinkFactorForPanel(target) or 1
++    local target_margin_factor = self:getPanelShrinkFactor(target) or 1
+     local target_zoom = canvasFitZoom(rect_b) * target_margin_factor
+ 
+     local bx, by
+@@ -1925,7 +1925,8 @@ function PanelViewer:animateBoundaryTransition(direction)
+     Timing.memory("smooth_boundary_transition")
+ 
+     local target_zoom = canvasFitZoom(rect_b)
+-    local target_margin_factor = self:getMarginShrinkFactorForPanel(nil, resolved.target_is_full_page) or 1
++    local target_is_full_page = resolved.target_is_full_page
++    local target_margin_factor = self:getPanelShrinkFactor(nil, target_is_full_page, rect_b, resolved.next_page) or 1
+ 
+     local ok_a, tile_a, rotated_a = pcall(function()
+         if self.crop_mode == "none" and self._images_list and self._images_list[self._images_list_cur] then
+@@ -2148,6 +2149,54 @@ function PanelViewer:getMarginShrinkFactorForPanel(image_num, is_full_page)
+     return 1 - math.min(0.9, ratio)
+ end
+ 
++--- Return how much to shrink a panel so it shows at the fixed page-width zoom.
++---
++--- Each panel is rendered at its own best-fit zoom (`canvasFitZoom`), so
++--- small panels end up hugely magnified. Shrinking the render box by
++--- `fixed / fit` shows every panel at the zoom that fits the page width to the
++--- screen; panels too big for that zoom keep fitting (no shrink).
++---
++--- @param rect PPRect|nil Crop rectangle the panel image was rendered from.
++--- @param page number|nil Document page the rectangle belongs to.
++--- @return number|nil factor Shrink factor below 1, or nil for no change.
++function PanelViewer:getFixedZoomShrinkFactor(rect, page)
++    if not rect or self.crop_mode == "none" or self.embedded_source_image then
++        return nil
++    end
++    local document = self.reader_ui and self.reader_ui.document
++    if not document then
++        return nil
++    end
++    local ok, dims = pcall(document.getNativePageDimensions, document, page or self.page)
++    if not ok or not dims or not dims.w or dims.w <= 0 then
++        return nil
++    end
++    local factor = (Screen:getWidth() / dims.w) / canvasFitZoom(rect)
++    if factor >= 1 then
++        return nil
++    end
++    return factor
++end
++
++--- Return the combined render-box shrink (margin crop and fixed zoom) for a panel.
++---
++--- @param image_num integer|nil 1-based panel index (defaults to the current one).
++--- @param is_full_page boolean|nil Explicit full-page flag, for an adjacent page's panel.
++--- @param rect PPRect|nil Explicit crop rectangle, for an adjacent page's panel.
++--- @param page number|nil Page of `rect` when it is not this viewer's page.
++--- @return number|nil factor Multiplier in (0, 1), or nil when no shrink applies.
++function PanelViewer:getPanelShrinkFactor(image_num, is_full_page, rect, page)
++    if not rect then
++        rect = self.image_rects and self.image_rects[image_num or self._images_list_cur or 1]
++    end
++    local margin = self:getMarginShrinkFactorForPanel(image_num, is_full_page)
++    local fixed = self:getFixedZoomShrinkFactor(rect, page)
++    if not margin and not fixed then
++        return nil
++    end
++    return (margin or 1) * (fixed or 1)
++end
++
+ --- Return the margin factor for the widget currently being built.
+ ---
+ --- A smooth transition temporarily displays a synthetic canvas but must use
+@@ -2159,7 +2208,7 @@ function PanelViewer:getMarginShrinkFactor()
+     if self._panels_plus_transition_margin_factor ~= nil then
+         return self._panels_plus_transition_margin_factor
+     end
+-    return self:getMarginShrinkFactorForPanel(self._images_list_cur)
++    return self:getPanelShrinkFactor(self._images_list_cur)
+ end
+ 
+ --- Shrink the box ImageViewer renders the panel into, for "margin" crop mode.
+diff --git i/src/_settings.lua w/src/_settings.lua
+index 2686530..fd12f7e 100644
+--- i/src/_settings.lua
++++ w/src/_settings.lua
+@@ -12,7 +12,7 @@ local Settings = {
+     },
+     defaults = {
+         enabled = true,
+-        mode = "manga",
++        mode = "comic",
+         crop_mode = "strict",
+         panel_margin_ratio = 0.12,
+         invert_swipe = false,
+diff --git i/src/native_panel_zoom.lua w/src/native_panel_zoom.lua
+index 77e449f..2106180 100644
+--- i/src/native_panel_zoom.lua
++++ w/src/native_panel_zoom.lua
+@@ -36,6 +36,58 @@ function NativePanelZoom:patchNativePanelZoom()
+     end
+ end
+ 
++--- Gesture-manager double-tap zones the panel trigger must win over (sides
++--- default to jumping +/-10 pages); they still fire when no panel is found.
++local DOUBLE_TAP_OVERRIDES = {
++    "double_tap_left_side",
++    "double_tap_right_side",
++    "double_tap_top_left_corner",
++    "double_tap_top_right_corner",
++    "double_tap_bottom_left_corner",
++    "double_tap_bottom_right_corner",
++}
++
++local DOUBLE_TAP_ZONE = {
++    id = "panels_plus_double_tap",
++    ges = "double_tap",
++    screen_zone = { ratio_x = 0, ratio_y = 0, ratio_w = 1, ratio_h = 1 },
++    overrides = DOUBLE_TAP_OVERRIDES,
++}
++
++--- Open the panel under a double tap/click, like Kindle's Panel View.
++---
++--- KOReader only emits `double_tap` when the topmost widget clears
++--- `disable_double_tap` (ReaderUI copies the global "Disable double tap"
++--- setting, true by default), so the reader opts in here. Trade-off: single
++--- taps wait for the double-tap interval before firing.
++function NativePanelZoom:registerDoubleTapPanelZoom()
++    local ui = self.ui
++    if not (ui and ui.paging and ui.registerTouchZones) then
++        return
++    end
++    ui.disable_double_tap = false
++    local zone = {}
++    for k, v in pairs(DOUBLE_TAP_ZONE) do
++        zone[k] = v
++    end
++    zone.handler = function(ges)
++        local highlight = ui.highlight
++        if not (highlight and self:isEnabled()) then
++            return false
++        end
++        return highlight:onPanelZoom(nil, ges) and true or false
++    end
++    ui:registerTouchZones({ zone })
++end
++
++--- Remove the double-tap panel trigger registered by `registerDoubleTapPanelZoom`.
++function NativePanelZoom:unregisterDoubleTapPanelZoom()
++    local ui = self.ui
++    if ui and ui.paging and ui.unRegisterTouchZones then
++        ui:unRegisterTouchZones({ DOUBLE_TAP_ZONE })
++    end
++end
++
+ --- Keep KOReader panel zoom active so disabling Panels+ focusing falls back to native panel zoom.
+ function NativePanelZoom:applyNativePanelSetting()
+     if self.ui.highlight and self.ui.paging then

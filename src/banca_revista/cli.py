@@ -11,6 +11,7 @@ from rich.console import Console
 from banca_revista.archive import ConversionError, convert_rar_to_cbz, inspect_rar
 from banca_revista.batch import DEFAULT_WORKERS, next_report_path, run_batch, save_report
 from banca_revista.cbr import convert_to_cbr
+from banca_revista.leitor import InstallError, install_reader
 from banca_revista.metadata import ComicMetadata, create_metadata_cbr, metadata_from_ocr
 from banca_revista.ocr import analyze_cbr
 from banca_revista.pipeline import process_to_library
@@ -118,12 +119,25 @@ def build_parser() -> argparse.ArgumentParser:
     process_parser.add_argument("source", type=Path)
     process_parser.add_argument("output", type=Path)
     process_parser.add_argument("--no-lookup-isbn", action="store_true")
+
+    reader_parser = subcommands.add_parser(
+        "instalar-leitor",
+        help="instala o KOReader (Flatpak) com o plugin Panels+ adaptado (duplo clique e zoom fixo)",
+    )
+    reader_parser.add_argument("--simular", action="store_true", help="mostra as etapas sem alterar nada")
     return parser
 
 
 def main() -> int:
     args = build_parser().parse_args()
     try:
+        if args.command == "instalar-leitor":
+            steps = install_reader(Path.home(), simulate=args.simular, report=print)
+            if args.simular:
+                print("simulação — etapas planejadas:")
+                for step in steps:
+                    print(f"  {step}")
+            return 0
         if args.command == "ocr":
             print(analyze_cbr(args.source, page_count=args.pages, lookup_isbn=args.lookup_isbn).to_json())
             return 0
@@ -221,7 +235,7 @@ def main() -> int:
             result = convert_rar_to_cbz(inspection, args.output)
             print(f"CBZ criado: {result.output}")
             print(f"primeira página no CBZ: {result.first_page}")
-    except (ConversionError, OSError) as error:
+    except (ConversionError, InstallError, OSError) as error:
         print(f"erro: {error}", file=sys.stderr)
         return 1
     return 0
