@@ -176,4 +176,37 @@ describe("PanelsPlus per-document settings persistence", function()
             assert.equals("margin", doc_store.panels_plus.crop_mode)
         end
     )
+    it("keeps a document's overrides out of the global settings", function()
+        local doc_store = { panels_plus = { mode = "manga" } }
+        local doc_settings_mock = {
+            file = "/sdcard/Books/sidooh_vol1.cbr",
+            readSetting = function(_, key)
+                return doc_store[key]
+            end,
+            saveSetting = function(_, key, val)
+                doc_store[key] = val
+            end,
+        }
+        local plugin = newPluginInstance("/sdcard/Books/sidooh_vol1.cbr", doc_settings_mock, { mode = "comic" })
+
+        plugin:loadDocSettings()
+        assert.equals("manga", plugin.settings.mode)
+        assert.equals("comic", plugin:globalSettingsSnapshot().mode)
+
+        plugin:setCropMode("loose")
+        local snapshot = plugin:globalSettingsSnapshot()
+        assert.equals("comic", snapshot.mode)
+        assert.equals("strict", snapshot.crop_mode)
+        assert.equals("loose", doc_store.panels_plus.crop_mode)
+        assert.equals("manga", plugin.settings.mode)
+    end)
+
+    it("saves the live settings globally when per-document settings are off", function()
+        local plugin = newPluginInstance("/sdcard/Books/doc_b.cbz", nil, { remember_doc_settings = false })
+
+        plugin:loadDocSettings()
+        plugin:setMode("comic")
+
+        assert.equals("comic", plugin:globalSettingsSnapshot().mode)
+    end)
 end)

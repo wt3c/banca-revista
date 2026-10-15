@@ -20,6 +20,9 @@ local Settings = require("src._settings")
 local Timing = require("src._timing")
 local ViewerController = require("src.viewer_controller")
 
+--- Settings a document can override (see saveDocSettings/loadDocSettings).
+local DOC_SETTING_KEYS = { "mode", "nav_transition_mode", "progress_bar_visible", "crop_mode" }
+
 --- KOReader plugin that replaces native panel zoom with ordered panel reading.
 ---
 --- The class owns plugin lifetime, settings state, and KOReader registration.
@@ -142,6 +145,13 @@ function PanelsPlus:loadDocSettings()
     if self.settings.remember_doc_settings == false then
         return
     end
+    -- Captured once, before any override: loadDocSettings also runs on onReaderReady.
+    if not self.global_doc_values then
+        self.global_doc_values = {}
+        for _, key in ipairs(DOC_SETTING_KEYS) do
+            self.global_doc_values[key] = self.settings[key]
+        end
+    end
     local doc_data = self:getDocSettings()
     if doc_data then
         self.doc_has_custom_settings = true
@@ -173,9 +183,26 @@ function PanelsPlus:setRememberDocSettings(enabled)
     end
 end
 
+--- Settings to persist globally: a document's own overrides stay in that document.
+---
+--- @return table settings
+function PanelsPlus:globalSettingsSnapshot()
+    if not (self.doc_has_custom_settings and self.global_doc_values) then
+        return self.settings
+    end
+    local snapshot = {}
+    for key, value in pairs(self.settings) do
+        snapshot[key] = value
+    end
+    for _, key in ipairs(DOC_SETTING_KEYS) do
+        snapshot[key] = self.global_doc_values[key]
+    end
+    return snapshot
+end
+
 --- Persist current plugin settings to KOReader reader settings.
 function PanelsPlus:saveSettings()
-    Settings.save(self.settings)
+    Settings.save(self:globalSettingsSnapshot())
 end
 
 --- Return whether Panels+ panel focusing is currently enabled.
