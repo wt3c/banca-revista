@@ -209,4 +209,40 @@ describe("PanelsPlus per-document settings persistence", function()
 
         assert.equals("comic", plugin:globalSettingsSnapshot().mode)
     end)
+    it("does not carry a document's overrides into the next document opened in the same session", function()
+        local store = { panels_plus = { mode = "comic", remember_doc_settings = true, doc_settings = {} } }
+        local previous = rawget(_G, "G_reader_settings")
+        _G.G_reader_settings = {
+            readSetting = function(_, key)
+                return store[key]
+            end,
+            saveSetting = function(_, key, val)
+                store[key] = val
+            end,
+        }
+        local function open(file, doc_store)
+            local plugin = newPluginInstance(file, {
+                file = file,
+                readSetting = function(_, key)
+                    return doc_store[key]
+                end,
+                saveSetting = function(_, key, val)
+                    doc_store[key] = val
+                end,
+            })
+            plugin.settings = nil
+            plugin.registerDoubleTapPanelZoom = function() end
+            plugin:init()
+            return plugin
+        end
+
+        local ok, err = pcall(function()
+            local manga = open("/sdcard/Books/sidooh_vol25.cbr", { panels_plus = { mode = "manga" } })
+            assert.equals("manga", manga.settings.mode)
+            local comic = open("/sdcard/Books/spawn_vol1.cbr", {})
+            assert.equals("comic", comic.settings.mode)
+        end)
+        _G.G_reader_settings = previous
+        assert.is_true(ok, tostring(err))
+    end)
 end)

@@ -63,7 +63,12 @@ include(PanelsPlus, NativePanelZoom)
 
 --- Initialize settings, panel cache state, menu registration, actions, and hook.
 function PanelsPlus:init()
-    self.settings = Settings.load()
+    -- Private copy: Settings.load returns KOReader's shared table, and a document's
+    -- overrides must not leak into the next document opened in this session.
+    self.settings = {}
+    for key, value in pairs(Settings.load()) do
+        self.settings[key] = value
+    end
     Timing.enabled = self.settings.debug_mode == true
     self:loadDocSettings()
     self.panel_cache = {}

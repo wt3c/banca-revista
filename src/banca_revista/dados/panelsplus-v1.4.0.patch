@@ -1,5 +1,5 @@
 diff --git a/main.lua b/main.lua
-index eb380ee..0f04afc 100644
+index eb380ee..7190752 100644
 --- a/main.lua
 +++ b/main.lua
 @@ -20,6 +20,9 @@ local Settings = require("src._settings")
@@ -12,7 +12,21 @@ index eb380ee..0f04afc 100644
  --- KOReader plugin that replaces native panel zoom with ordered panel reading.
  ---
  --- The class owns plugin lifetime, settings state, and KOReader registration.
-@@ -69,6 +72,7 @@ function PanelsPlus:init()
+@@ -60,7 +63,12 @@ include(PanelsPlus, NativePanelZoom)
+ 
+ --- Initialize settings, panel cache state, menu registration, actions, and hook.
+ function PanelsPlus:init()
+-    self.settings = Settings.load()
++    -- Private copy: Settings.load returns KOReader's shared table, and a document's
++    -- overrides must not leak into the next document opened in this session.
++    self.settings = {}
++    for key, value in pairs(Settings.load()) do
++        self.settings[key] = value
++    end
+     Timing.enabled = self.settings.debug_mode == true
+     self:loadDocSettings()
+     self.panel_cache = {}
+@@ -69,6 +77,7 @@ function PanelsPlus:init()
      self.ui.menu:registerToMainMenu(self)
      self:onDispatcherRegisterActions()
      self:patchNativePanelZoom()
@@ -20,7 +34,7 @@ index eb380ee..0f04afc 100644
      self:applyNativePanelSetting()
  end
  
-@@ -141,6 +145,13 @@ function PanelsPlus:loadDocSettings()
+@@ -141,6 +150,13 @@ function PanelsPlus:loadDocSettings()
      if self.settings.remember_doc_settings == false then
          return
      end
@@ -34,7 +48,7 @@ index eb380ee..0f04afc 100644
      local doc_data = self:getDocSettings()
      if doc_data then
          self.doc_has_custom_settings = true
-@@ -172,9 +183,26 @@ function PanelsPlus:setRememberDocSettings(enabled)
+@@ -172,9 +188,26 @@ function PanelsPlus:setRememberDocSettings(enabled)
      end
  end
  
@@ -62,7 +76,7 @@ index eb380ee..0f04afc 100644
  end
  
  --- Return whether Panels+ panel focusing is currently enabled.
-@@ -474,6 +502,7 @@ function PanelsPlus:onCloseWidget()
+@@ -474,6 +507,7 @@ function PanelsPlus:onCloseWidget()
      self:cancelPanelPrerender()
      self:clearPanelCache()
      self:restoreNativePanelZoom()
