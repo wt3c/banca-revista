@@ -15,18 +15,19 @@ from typing import BinaryIO
 
 from banca_revista.archive import (
     IMAGE_EXTENSIONS,
+    PDF_SIGNATURE,
     RAR4_SIGNATURE,
     RAR5_SIGNATURE,
     ZIP_SIGNATURES,
     ConversionError,
-    detect_archive_format,
     inspect_rar,
     natural_key,
     open_rar_member,
 )
+from banca_revista.container import COMIC_EXTENSIONS, inspect_container
 from banca_revista.metadata import ComicMetadata, parse_comic_metadata, read_rar_comment
 
-PDF_SIGNATURE = b"%PDF-"
+_CONTAINER_HINT = "contêiner de quadrinhos: use o comando batch, que extrai cada arquivo antes de converter"
 _IGNORED_ZIP_EXTENSIONS = frozenset({".diz", ".nfo", ".txt", ".xml"})
 
 
@@ -98,6 +99,8 @@ def convert_to_cbr(
         raise ConversionError("o DPI deve estar entre 72 e 600")
     _require_executable(rar)
     _require_executable(unrar)
+    if input_format == "rar" and inspect_container(original, unrar=unrar) is not None:
+        raise ConversionError(f"o RAR é um {_CONTAINER_HINT}")
 
     destination.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix=f".{destination.stem}-", dir=destination.parent) as temporary_name:
@@ -120,7 +123,8 @@ def convert_to_cbr(
                 authors=(inspection.author,) if inspection.author else (),
             )
         elif input_format == "zip":
-            staged, hashes, strategy = _stage_zip(original, pages_dir, unrar=unrar)
+            staged, hashes = _stage_zip(original, pages_dir)
+            strategy = "zip-images"
             metadata = ComicMetadata(title=original.stem)
         else:
             staged, hashes = _stage_rar(original, pages_dir, unrar=unrar)
@@ -186,8 +190,8 @@ def pdf_lossless_eligible(page_count: int, images: tuple[PdfImage, ...]) -> bool
     )
 
 
-def classify_zip_entries(names: Iterable[str]) -> tuple[str, tuple[str, ...]]:
-    """Classifica ZIP de imagens ou coleção de CBRs e rejeita mistura ambígua."""
+def classify_zip_entries(names: Iterable[str]) -> tuple[str, ...]:
+    """Seleciona as imagens do ZIP e rejeita contêineres de quadrinhos ou conteúdo ambíguo."""
     images: list[str] = []
     comics: list[str] = []
     unexpected: list[str] = []
@@ -201,18 +205,19 @@ def classify_zip_entries(names: Iterable[str]) -> tuple[str, tuple[str, ...]]:
         suffix = path.suffix.casefold()
         if suffix in IMAGE_EXTENSIONS:
             images.append(raw_name)
-        elif suffix == ".cbr":
+        elif suffix in COMIC_EXTENSIONS:
             comics.append(raw_name)
         elif suffix not in _IGNORED_ZIP_EXTENSIONS:
             unexpected.append(raw_name)
     if unexpected or (images and comics):
-        detail = unexpected[0] if unexpected else "imagens e CBRs no mesmo ZIP"
+        detail = unexpected[0] if unexpected else "imagens e quadrinhos no mesmo ZIP"
         raise ConversionError(f"conteúdo ZIP ambíguo: {detail}")
-    selected = images or comics
-    if not selected:
-        raise ConversionError("o ZIP não contém imagens nem arquivos CBR")
-    selected.sort(key=natural_key)
-    return ("images" if images else "nested-cbr"), tuple(selected)
+    if comics:
+        raise ConversionError(f"o ZIP é um {_CONTAINER_HINT}")
+    if not images:
+        raise ConversionError("o ZIP não contém imagens")
+    images.sort(key=natural_key)
+    return tuple(images)
 
 
 def _stage_pdf(
@@ -262,33 +267,17 @@ def _stage_pdf(
     return (*_stage_files(extracted, pages_dir), strategy)
 
 
-def _stage_zip(source: Path, pages_dir: Path, *, unrar: str) -> tuple[list[Path], dict[str, str], str]:
+def _stage_zip(source: Path, pages_dir: Path) -> tuple[list[Path], dict[str, str]]:
     staged: list[Path] = []
     hashes: dict[str, str] = {}
     with zipfile.ZipFile(source) as archive:
         bad_member = archive.testzip()
         if bad_member is not None:
             raise ConversionError(f"o ZIP falhou na validação CRC: {bad_member}")
-        mode, entries = classify_zip_entries(info.filename for info in archive.infolist())
-        if mode == "images":
-            for name in entries:
-                with archive.open(name) as stream:
-                    _stage_stream(stream, Path(name).suffix, pages_dir, staged, hashes)
-            return staged, hashes, "zip-images"
-
-        nested_dir = pages_dir.parent / "nested"
-        nested_dir.mkdir()
-        for issue_index, name in enumerate(entries, start=1):
-            nested = nested_dir / f"issue-{issue_index:04}.cbr"
-            with archive.open(name) as source_stream, nested.open("wb") as destination:
-                shutil.copyfileobj(source_stream, destination)
-            if detect_archive_format(nested) != "rar":
-                raise ConversionError(f"o CBR interno não contém RAR: {name}")
-            inspection = inspect_rar(nested, unrar=unrar, flatten=False)
-            for page in inspection.pages:
-                with open_rar_member(nested, page.source_name, unrar=unrar) as stream:
-                    _stage_stream(stream, Path(page.output_name).suffix, pages_dir, staged, hashes)
-        return staged, hashes, "zip-nested-cbr"
+        for name in classify_zip_entries(info.filename for info in archive.infolist()):
+            with archive.open(name) as stream:
+                _stage_stream(stream, Path(name).suffix, pages_dir, staged, hashes)
+    return staged, hashes
 
 
 def _stage_rar(source: Path, pages_dir: Path, *, unrar: str) -> tuple[list[Path], dict[str, str]]:

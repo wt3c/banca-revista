@@ -84,3 +84,41 @@ def test_summary_and_dry_run_are_human_readable(tmp_path: Path) -> None:
 
 def _processed(item: BatchItem) -> BatchItem:
     return BatchItem(item.source, item.output, item.phase, "processed", "10 páginas")
+
+
+def test_plan_and_summary_show_container_extraction(tmp_path: Path) -> None:
+    stream = StringIO()
+    console = Console(file=stream, color_system=None, force_terminal=False, width=120)
+    planned = BatchItem(tmp_path / "pack.zip", tmp_path, "extract", "planned", "contém 2 quadrinhos")
+    extracted = BatchItem(tmp_path / "pack.zip", tmp_path, "extract", "extracted", "2 quadrinhos extraídos")
+
+    render_plan(console, BatchReport(tmp_path, tmp_path / "out", True, 2, (planned,)))
+    render_summary(console, BatchReport(tmp_path, tmp_path / "out", False, 2, (extracted,)))
+    with BatchProgressDisplay(console, base=tmp_path, output_dir=tmp_path / "out", workers=2) as display:
+        display(BatchProgressEvent("planned", 1, 0, (extracted,)))
+        display(BatchProgressEvent("completed", 1, 1, (extracted,), extracted))
+
+    output = stream.getvalue()
+    assert "📂 Contêineres" in output
+    assert "📂 Contêineres extraídos" in output
+    assert "Processamento concluído" in output
+
+
+def test_plan_and_summary_show_originals_sent_to_trash(tmp_path: Path) -> None:
+    stream = StringIO()
+    console = Console(file=stream, color_system=None, force_terminal=False, width=120)
+    removed = BatchItem(tmp_path / "ok.pdf", tmp_path / "out" / "ok.cbr", "convert", "processed", source_removed=True)
+    kept = BatchItem(
+        tmp_path / "ok2.pdf", tmp_path / "out" / "ok2.cbr", "convert", "processed", "original mantido: sem permissão"
+    )
+
+    render_plan(console, BatchReport(tmp_path, tmp_path / "out", True, 2, (), remove_originals=True))
+    render_summary(console, BatchReport(tmp_path, tmp_path / "out", False, 2, (removed, kept), remove_originals=True))
+
+    output = stream.getvalue()
+    assert "🗑️  Originais" in output
+    assert "Lixeira após publicação" in output
+    assert "🗑️  Originais na Lixeira" in output
+    assert "Originais mantidos" in output
+    assert "ok2.pdf" in output
+    assert "sem permissão" in output

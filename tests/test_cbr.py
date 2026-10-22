@@ -19,23 +19,32 @@ def test_detect_cbr_source_uses_signature(tmp_path: Path) -> None:
 
 
 def test_classify_zip_images_sorts_naturally() -> None:
-    mode, entries = classify_zip_entries(["volume/10.jpg", "volume/2.jpg", "volume/1.jpg", "ComicInfo.xml"])
+    entries = classify_zip_entries(["volume/10.jpg", "volume/2.jpg", "volume/1.jpg", "ComicInfo.xml"])
 
-    assert mode == "images"
     assert entries == ("volume/1.jpg", "volume/2.jpg", "volume/10.jpg")
 
 
-def test_classify_zip_nested_cbr_sorts_issues() -> None:
-    mode, entries = classify_zip_entries(["series/issue 10.cbr", "series/issue 2.cbr", "series/issue 1.cbr"])
+@pytest.mark.parametrize("names", [["series/issue 1.cbr"], ["series/issue 1.cbz"], ["series/issue 1.pdf"]])
+def test_classify_zip_rejects_comic_container(names: list[str]) -> None:
+    with pytest.raises(ConversionError, match="contêiner de quadrinhos"):
+        classify_zip_entries(names)
 
-    assert mode == "nested-cbr"
-    assert entries == ("series/issue 1.cbr", "series/issue 2.cbr", "series/issue 10.cbr")
 
-
-@pytest.mark.parametrize("names", [["../cover.jpg"], ["cover.jpg", "issue.cbr"], ["document.pdf"]])
+@pytest.mark.parametrize("names", [["../cover.jpg"], ["cover.jpg", "issue.cbr"], ["document.docx"], []])
 def test_classify_zip_rejects_unsafe_or_ambiguous_content(names: list[str]) -> None:
     with pytest.raises(ConversionError):
         classify_zip_entries(names)
+
+
+@pytest.mark.skipif(not shutil.which("rar") or not shutil.which("unrar"), reason="rar e unrar não instalados")
+def test_convert_to_cbr_refuses_comic_container(tmp_path: Path) -> None:
+    source = tmp_path / "pack.zip"
+    with zipfile.ZipFile(source, "w") as archive:
+        archive.writestr("issue 1.pdf", b"%PDF-1.4")
+
+    with pytest.raises(ConversionError, match="contêiner de quadrinhos"):
+        convert_to_cbr(source, tmp_path / "pack.cbr")
+    assert not (tmp_path / "pack.cbr").exists()
 
 
 def test_pdf_lossless_requires_one_jpeg_per_page() -> None:

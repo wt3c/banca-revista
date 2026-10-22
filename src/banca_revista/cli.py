@@ -94,6 +94,11 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="substitui uma saída somente depois que a nova cópia for validada",
     )
+    batch_parser.add_argument(
+        "--remove-originals",
+        action="store_true",
+        help="envia à Lixeira os originais publicados com sucesso nesta execução; falhas ficam na origem",
+    )
     batch_parser.add_argument("--report", type=Path, help="arquivo JSON do relatório durante a execução")
     batch_parser.add_argument(
         "--json",
@@ -189,6 +194,7 @@ def main() -> int:
                         lookup_isbn=not args.no_lookup_isbn,
                         workers=args.workers,
                         replace_existing=args.replace_existing,
+                        remove_originals=args.remove_originals,
                         progress_callback=display,
                     )
             else:
@@ -199,6 +205,7 @@ def main() -> int:
                     lookup_isbn=not args.no_lookup_isbn,
                     workers=args.workers,
                     replace_existing=args.replace_existing,
+                    remove_originals=args.remove_originals,
                 )
             report_path = None
             if args.execute:

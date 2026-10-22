@@ -2,14 +2,15 @@
 
 ## Objetivo
 
-A ferramenta converte PDFs e ZIPs em RAR 5 com extensão `.cbr`, mantendo a pasta de origem somente leitura. A origem
-inicial desta etapa é:
+A ferramenta converte PDFs e ZIPs em RAR 5 com extensão `.cbr`, sem alterar os arquivos originais; só a opção
+`--remove-originals` os retira da origem, enviando-os à Lixeira. A origem inicial desta etapa é:
 
 ```text
 /home/boladuz/Downloads/Telegram Desktop
 ```
 
-As saídas nunca são criadas nessa pasta. Um destino existente não é sobrescrito.
+As saídas convertidas nunca são criadas nessa pasta. A única escrita permitida nela é a extração de contêineres,
+descrita abaixo. Um destino existente não é sobrescrito.
 
 ## Conversão individual
 
@@ -43,11 +44,33 @@ senha são rejeitados.
 A estrutura é detectada automaticamente:
 
 - ZIP de imagens: as imagens são ordenadas naturalmente e copiadas sem alteração;
-- ZIP de CBRs: os CBRs são ordenados por edição e suas páginas são concatenadas;
+- ZIP ou RAR com `.cbr`, `.cbz` ou `.pdf`: é um contêiner de quadrinhos (ver abaixo); o `to-cbr` o recusa e indica
+  o comando `batch`;
 - conteúdo misto ou desconhecido: a conversão é rejeitada como ambígua.
 
 As páginas finais recebem nomes sequenciais como `000001.jpg`. Isso elimina colisões entre edições sem modificar os
 bytes das imagens.
+
+## Contêineres de quadrinhos
+
+Antes de converter um ZIP ou RAR, o conteúdo é analisado. Se houver imagens, o arquivo é tratado como um quadrinho
+normal. Se houver `.cbr`, `.cbz` ou `.pdf`, ele é um contêiner: no lote, cada quadrinho é extraído para a mesma pasta
+do contêiner e depois convertido individualmente, gerando um `.cbr` por edição na biblioteca.
+
+Regras da extração:
+
+- a simulação não extrai nada; apenas lista o que seria extraído na fase `extract`;
+- o contêiner original nunca é alterado; só sai da origem com `--remove-originals` (veja abaixo);
+- cada arquivo é gravado em temporário oculto (`.banca-*.tmp`), validado pelo cabeçalho e publicado sem sobrescrita;
+- um arquivo homônimo com o mesmo SHA-256 é reaproveitado, o que torna a reexecução idempotente; com conteúdo
+  diferente, o contêiner falha e o lote continua;
+- quadrinhos que produziriam a mesma saída (`X.pdf` e `X.cbz`, ou um `X.pdf` já presente na pasta), caminhos
+  inseguros ou entradas com senha fazem só aquele contêiner falhar, antes de qualquer escrita;
+- havendo imagens, o arquivo é um quadrinho comum mesmo que traga um `.pdf`/`.cbr` extra: o ZIP continua rejeitado
+  como ambíguo e o RAR converte apenas as imagens, como antes;
+- temporários `.banca-*` deixados por uma interrupção são ignorados pelo planejamento;
+- contêineres extraídos que contenham outros contêineres são extraídos na mesma execução;
+- se a extração falhar no meio, os arquivos já publicados permanecem, pois são cópias íntegras do conteúdo.
 
 ## Processamento em lote
 
@@ -73,8 +96,27 @@ uv run banca-revista batch-to-cbr --execute
 
 Cada falha é isolada e registrada. Saídas existentes são marcadas como `skipped`; os itens seguintes continuam sendo
 processados. O primeiro relatório é `conversion-report.json`; lotes posteriores usam sufixos sequenciais sem
-sobrescrever o histórico. A pasta de origem permanece intacta: "mover" neste fluxo significa publicar a cópia
-processada em `~/banca` após as validações.
+sobrescrever o histórico. Sem `--remove-originals`, a pasta de origem permanece intacta: "mover" neste fluxo
+significa publicar a cópia processada em `~/banca` após as validações.
+
+### Remoção dos originais publicados
+
+Com `--remove-originals`, ao fim da execução os originais publicados com sucesso vão para a Lixeira do usuário
+(`$XDG_DATA_HOME/Trash`, especificação freedesktop.org), de onde podem ser restaurados pelo gerenciador de arquivos.
+Na origem ficam apenas os arquivos que exigem atenção.
+
+- Só itens `processed` nesta execução saem. `failed`, `unsupported` e `skipped` ficam: `skipped` é decidido pelo
+  nome da saída, não pelo conteúdo, e por isso não prova que aquele original está em `~/banca`.
+- Um contêiner sai só depois que todos os quadrinhos extraídos dele saíram; vale também para contêineres aninhados.
+- A remoção é feita por `link` + `unlink`, com o nome reservado pelo `.trashinfo`: nunca copia, nunca apaga em
+  definitivo e nunca sobrescreve um item da Lixeira (nomes repetidos recebem sufixo `.2`, `.3`...).
+- Exige que a origem esteja na mesma partição da Lixeira. Se o envio falhar, o original fica, o item continua
+  `processed` e o motivo aparece no relatório (`original mantido: ...`) e na tabela de originais mantidos.
+- A simulação nunca remove nada; com a opção, ela apenas informa que a remoção está ativa.
+
+```bash
+uv run banca-revista batch-to-cbr --execute --remove-originals
+```
 
 Por padrão, até 10 arquivos percorrem seus pipelines completos em processos independentes. As etapas de um arquivo
 são sequenciais porque normalização, OCR, enriquecimento e publicação dependem da etapa anterior. Arquivos diferentes
@@ -106,7 +148,7 @@ a saída; o relatório em arquivo continua sendo salvo normalmente nas execuçõ
 
 Antes de publicar a saída, a ferramenta:
 
-1. testa CRC do ZIP ou integridade dos CBRs internos;
+1. testa CRC do ZIP ou integridade do RAR;
 2. rejeita caminhos absolutos e travessia por `..`;
 3. cria o RAR em diretório temporário no mesmo filesystem do destino;
 4. testa integralmente o RAR criado;
@@ -122,7 +164,7 @@ Prometheus - Fogo e Pedra 01.pdf
 
 Wolverine - O Fim.zip
   estrutura: 6 CBRs internos
-  estratégia: zip-nested-cbr
+  estratégia: zip-nested-cbr (substituída pela extração de contêineres)
   páginas finais: 149
 ```
 

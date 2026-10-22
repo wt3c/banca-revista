@@ -12,12 +12,14 @@ from rich.progress import BarColumn, Progress, SpinnerColumn, TaskID, TaskProgre
 from rich.table import Table
 from rich.text import Text
 
+from banca_revista.batch import KEPT_ORIGINAL_MARKER as _KEPT_MARKER
 from banca_revista.batch import BatchItem, BatchProgressEvent, BatchReport
 
 _PHASES = {
     "convert": ("🔄 Conversão", "cyan"),
     "process-cbr": ("📚 Normalização + metadados", "magenta"),
     "unsupported": ("🚫 Não suportados", "yellow"),
+    "extract": ("📂 Extração de contêineres", "blue"),
 }
 
 
@@ -158,7 +160,11 @@ def render_plan(console: Console, report: BatchReport) -> None:
     """Mostra uma simulação compacta antes de qualquer escrita."""
     phase_counts = Counter(item.phase for item in report.items)
     console.print(Panel("[bold yellow]🧭 Simulação: nenhum arquivo foi alterado[/bold yellow]", border_style="yellow"))
-    console.print(_configuration_table(report.base, report.output_dir, report.workers, phase_counts))
+    console.print(
+        _configuration_table(
+            report.base, report.output_dir, report.workers, phase_counts, remove_originals=report.remove_originals
+        )
+    )
     console.print("[dim]Use [bold]--execute[/bold] para iniciar o processamento.[/dim]")
 
 
@@ -172,7 +178,12 @@ def render_summary(console: Console, report: BatchReport, *, report_path: Path |
     status_table.add_column()
     status_table.add_row("[bold green]✅ Processados[/bold green]", str(statuses["processed"]))
     status_table.add_row("[bold yellow]⏭️  Ignorados[/bold yellow]", str(statuses["skipped"]))
+    if statuses["extracted"]:
+        status_table.add_row("[bold blue]📂 Contêineres extraídos[/bold blue]", str(statuses["extracted"]))
     status_table.add_row("[bold red]❌ Falhas[/bold red]", str(statuses["failed"]))
+    if report.remove_originals:
+        removed = sum(item.source_removed for item in report.items)
+        status_table.add_row("[bold magenta]🗑️  Originais na Lixeira[/bold magenta]", str(removed))
     status_table.add_row("[yellow]⚠️  Com avisos[/yellow]", str(warnings))
     status_table.add_row("[cyan]🔎 Com ISBN[/cyan]", str(with_isbn))
     footer = Text()
@@ -190,9 +201,24 @@ def render_summary(console: Console, report: BatchReport, *, report_path: Path |
         for item in failures:
             failure_table.add_row(item.source.name, item.detail or "falha sem detalhes")
         console.print(failure_table)
+    kept = [item for item in report.items if _KEPT_MARKER in (item.detail or "")]
+    if kept:
+        kept_table = Table(title="⚠️  Originais mantidos na origem", border_style="yellow", expand=True)
+        kept_table.add_column("Arquivo", style="bold")
+        kept_table.add_column("Motivo", style="yellow")
+        for item in kept:
+            kept_table.add_row(item.source.name, (item.detail or "").split(_KEPT_MARKER, 1)[1])
+        console.print(kept_table)
 
 
-def _configuration_table(base: Path, output_dir: Path, workers: int, phase_counts: Counter[str]) -> Table:
+def _configuration_table(
+    base: Path,
+    output_dir: Path,
+    workers: int,
+    phase_counts: Counter[str],
+    *,
+    remove_originals: bool = False,
+) -> Table:
     table = Table(title="📋 Plano do lote", border_style="blue", show_header=False, pad_edge=False)
     table.add_column(style="bold blue")
     table.add_column(overflow="fold")
@@ -202,8 +228,12 @@ def _configuration_table(base: Path, output_dir: Path, workers: int, phase_count
     table.add_row("📦 Arquivos", str(sum(phase_counts.values())))
     table.add_row("🔄 Conversões", str(phase_counts["convert"]))
     table.add_row("📚 CBRs", str(phase_counts["process-cbr"]))
+    if phase_counts["extract"]:
+        table.add_row("📂 Contêineres", str(phase_counts["extract"]))
     if phase_counts["unsupported"]:
         table.add_row("🚫 Não suportados", str(phase_counts["unsupported"]))
+    if remove_originals:
+        table.add_row("🗑️  Originais", "Lixeira após publicação bem-sucedida")
     return table
 
 
@@ -213,4 +243,5 @@ def _status_display(status: str) -> tuple[str, str]:
         "skipped": ("⏭️", "yellow"),
         "failed": ("❌", "red"),
         "unsupported": ("🚫", "yellow"),
+        "extracted": ("📂", "blue"),
     }.get(status, ("•", "white"))

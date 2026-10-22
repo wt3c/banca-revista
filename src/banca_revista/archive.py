@@ -16,6 +16,7 @@ from typing import BinaryIO, Protocol
 RAR4_SIGNATURE = b"Rar!\x1a\x07\x00"
 RAR5_SIGNATURE = b"Rar!\x1a\x07\x01\x00"
 ZIP_SIGNATURES = (b"PK\x03\x04", b"PK\x05\x06", b"PK\x07\x08")
+PDF_SIGNATURE = b"%PDF-"
 IMAGE_EXTENSIONS = frozenset({".gif", ".jpeg", ".jpg", ".png", ".webp"})
 _NATURAL_PART = re.compile(r"(\d+)")
 
@@ -119,10 +120,14 @@ def inspect_rar(path: Path, *, unrar: str = "unrar", flatten: bool = True) -> Ar
         raise ConversionError(f"o conteúdo não é RAR: {source}")
 
     _run_unrar([unrar, "t", "-idq", "-p-", "--", os.fspath(source)])
-    listing = _run_unrar([unrar, "lb", "-p-", "--", os.fspath(source)])
-    names = tuple(line for line in listing.stdout.splitlines() if line)
-    pages, common_parent = plan_pages(names, flatten=flatten)
+    pages, common_parent = plan_pages(list_rar_entries(source, unrar=unrar), flatten=flatten)
     return ArchiveInspection(source=source, archive_format="rar", pages=pages, common_parent=common_parent)
+
+
+def list_rar_entries(path: Path, *, unrar: str = "unrar") -> tuple[str, ...]:
+    """Lista os nomes do RAR sem extraí-lo nem testar a integridade do conteúdo."""
+    listing = _run_unrar([unrar, "lb", "-p-", "--", os.fspath(path)])
+    return tuple(line for line in listing.stdout.splitlines() if line)
 
 
 def convert_rar_to_cbz(
