@@ -1,4 +1,4 @@
-"""Conversão segura de PDF e ZIP para CBR verdadeiro."""
+"""Conversão segura de PDF, ZIP, RAR e 7-Zip para CBR verdadeiro."""
 
 from __future__ import annotations
 
@@ -18,6 +18,7 @@ from banca_revista.archive import (
     PDF_SIGNATURE,
     RAR4_SIGNATURE,
     RAR5_SIGNATURE,
+    SEVENZIP_SIGNATURE,
     ZIP_SIGNATURES,
     ConversionError,
     inspect_rar,
@@ -26,6 +27,7 @@ from banca_revista.archive import (
 )
 from banca_revista.container import COMIC_EXTENSIONS, inspect_container
 from banca_revista.metadata import ComicMetadata, parse_comic_metadata, read_rar_comment
+from banca_revista.sevenzip import extract_7z_pages, inspect_7z
 
 _CONTAINER_HINT = "contêiner de quadrinhos: use o comando batch, que extrai cada arquivo antes de converter"
 _IGNORED_ZIP_EXTENSIONS = frozenset({".diz", ".nfo", ".txt", ".xml"})
@@ -64,7 +66,7 @@ class CbrConversionResult:
 
 
 def detect_cbr_source(path: Path) -> str:
-    """Detecta PDF ou ZIP pelo cabeçalho, sem confiar na extensão."""
+    """Detecta PDF, ZIP, RAR ou 7-Zip pelo cabeçalho, sem confiar na extensão."""
     with path.open("rb") as stream:
         signature = stream.read(8)
     if signature.startswith(PDF_SIGNATURE):
@@ -73,7 +75,9 @@ def detect_cbr_source(path: Path) -> str:
         return "zip"
     if signature.startswith((RAR4_SIGNATURE, RAR5_SIGNATURE)):
         return "rar"
-    raise ConversionError(f"a origem não é PDF, ZIP nem RAR: {path}")
+    if signature.startswith(SEVENZIP_SIGNATURE):
+        return "7z"
+    raise ConversionError(f"a origem não é PDF, ZIP, RAR nem 7z: {path}")
 
 
 def convert_to_cbr(
@@ -87,8 +91,9 @@ def convert_to_cbr(
     pdfinfo: str = "pdfinfo",
     pdfimages: str = "pdfimages",
     pdftoppm: str = "pdftoppm",
+    sevenzip: str = "7z",
 ) -> CbrConversionResult:
-    """Converte PDF ou ZIP em novo CBR atômico, preservando a origem."""
+    """Converte PDF, ZIP, RAR ou 7-Zip em novo CBR atômico, preservando a origem."""
     original = source.resolve(strict=True)
     destination = output.resolve()
     input_format = detect_cbr_source(original)
@@ -99,8 +104,8 @@ def convert_to_cbr(
         raise ConversionError("o DPI deve estar entre 72 e 600")
     _require_executable(rar)
     _require_executable(unrar)
-    if input_format == "rar" and inspect_container(original, unrar=unrar) is not None:
-        raise ConversionError(f"o RAR é um {_CONTAINER_HINT}")
+    if input_format in {"rar", "7z"} and inspect_container(original, unrar=unrar, sevenzip=sevenzip) is not None:
+        raise ConversionError(f"o {input_format.upper()} é um {_CONTAINER_HINT}")
 
     destination.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix=f".{destination.stem}-", dir=destination.parent) as temporary_name:
@@ -126,6 +131,10 @@ def convert_to_cbr(
             staged, hashes = _stage_zip(original, pages_dir)
             strategy = "zip-images"
             metadata = ComicMetadata(title=original.stem)
+        elif input_format == "7z":
+            staged, hashes = _stage_7z(original, pages_dir, sevenzip=sevenzip)
+            strategy = "7z-normalized"
+            metadata = ComicMetadata(title=original.stem)
         else:
             staged, hashes = _stage_rar(original, pages_dir, unrar=unrar)
             strategy = "cbr-normalized"
@@ -146,7 +155,7 @@ def convert_to_cbr(
     )
 
 
-def count_source_pages(source: Path, *, unrar: str = "unrar", pdfinfo: str = "pdfinfo") -> int:
+def count_source_pages(source: Path, *, unrar: str = "unrar", pdfinfo: str = "pdfinfo", sevenzip: str = "7z") -> int:
     """Conta as páginas que ``convert_to_cbr`` publicaria, sem extrair nem escrever nada."""
     input_format = detect_cbr_source(source)
     if input_format == "pdf":
@@ -157,6 +166,8 @@ def count_source_pages(source: Path, *, unrar: str = "unrar", pdfinfo: str = "pd
     if input_format == "zip":
         with zipfile.ZipFile(source) as archive:
             return len(classify_zip_entries(info.filename for info in archive.infolist()))
+    if input_format == "7z":
+        return len(inspect_7z(source, sevenzip=sevenzip, flatten=False).pages)
     return len(inspect_rar(source, unrar=unrar, flatten=False).pages)
 
 
@@ -302,6 +313,13 @@ def _stage_rar(source: Path, pages_dir: Path, *, unrar: str) -> tuple[list[Path]
         with open_rar_member(source, page.source_name, unrar=unrar) as stream:
             _stage_stream(stream, Path(page.output_name).suffix, pages_dir, staged, hashes)
     return staged, hashes
+
+
+def _stage_7z(source: Path, pages_dir: Path, *, sevenzip: str) -> tuple[list[Path], dict[str, str]]:
+    inspection = inspect_7z(source, sevenzip=sevenzip, flatten=False)
+    extracted_dir = pages_dir.parent / "7z-extracted"
+    extracted_dir.mkdir()
+    return _stage_files(extract_7z_pages(inspection, extracted_dir, sevenzip=sevenzip), pages_dir)
 
 
 def _stage_files(files: list[Path], pages_dir: Path) -> tuple[list[Path], dict[str, str]]:

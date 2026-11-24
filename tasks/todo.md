@@ -50,3 +50,21 @@ Decisão do usuário: `skipped` só sai se a saída existente for validada (RAR 
 - [x] `AGENTS.md` e `docs/conversao-pdf-zip-cbr.md`
 - [x] Suíte completa (100 ok, 1 skip de rede, 2,97 s), ruff e simulação na origem real (12 planejados)
 - [x] Execução real, 10 workers: 21 originais na Lixeira (19 skipped validados); 3 com falha mantidos
+
+## Ativa — suporte a 7-Zip (CB7) (2026-11-23)
+
+Origem: `Tartarugas Ninja x Stranger Things.zip` falhou porque `#01` e `#02` são 7-Zip com extensão `.cbr`.
+Decisão aprovada: opção (A) — listar e validar, depois extrair tudo numa pasta temporária isolada (o 7-Zip sólido
+tornaria a leitura por página ~21× mais lenta; medido no `#01` real).
+
+- [x] Medição no `#01` real (sólido, 1 bloco, 21 páginas: 0,73 s extração completa × 0,72 s por página)
+- [x] Testes (TDD) com 7-Zip real: assinatura, inspeção sem escrita, conversão com SHA-256, senha (dados e
+  cabeçalho), truncado, link simbólico, contêiner 7z e lote com ZIP contendo 7z disfarçado
+- [x] `sevenzip.py`; 7z em `detect_archive_format`, `detect_cbr_source`, `convert_to_cbr`, `count_source_pages`
+  e `container.py`
+- [x] `docs/conversao-pdf-zip-cbr.md` e `AGENTS.md`
+- [x] Suíte completa e ruff limpos; Codex revisou o diff: único achado (`@nome` como lista no `7z e`) refutado
+  empiricamente — após `--` o nome é literal — e travado por teste que falha se o `--` sair
+- [x] Simulação na origem real e lote completo numa cópia do `Tartarugas Ninja x Stranger Things.zip` (4 edições:
+  21, 21, 20 e 20 páginas; `#01`/`#02` via `7z-normalized`)
+- [x] Execução real em `~/banca` (2026-11-23, autorizada): 4 edições publicadas e originais na Lixeira

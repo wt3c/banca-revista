@@ -1,4 +1,4 @@
-"""Inspeção e extração de ZIP/RAR que agrupam quadrinhos (CBR, CBZ ou PDF)."""
+"""Inspeção e extração de ZIP/RAR/7z que agrupam quadrinhos (CBR, CBZ ou PDF)."""
 
 from __future__ import annotations
 
@@ -22,13 +22,14 @@ from banca_revista.archive import (
     natural_key,
     open_rar_member,
 )
+from banca_revista.sevenzip import list_7z_entries, open_7z_member
 
 COMIC_EXTENSIONS = frozenset({".cbr", ".cbz", ".pdf"})
 
 
 @dataclass(frozen=True)
 class ContainerInspection:
-    """ZIP ou RAR cujo conteúdo são quadrinhos, não páginas."""
+    """ZIP, RAR ou 7z cujo conteúdo são quadrinhos, não páginas."""
 
     source: Path
     archive_format: str
@@ -72,7 +73,7 @@ def find_comic_entries(names: Iterable[str]) -> tuple[str, ...]:
     return tuple(comics)
 
 
-def inspect_container(path: Path, *, unrar: str = "unrar") -> ContainerInspection | None:
+def inspect_container(path: Path, *, unrar: str = "unrar", sevenzip: str = "7z") -> ContainerInspection | None:
     """Lista o conteúdo sem escrever nada; ``None`` quando não há quadrinhos dentro."""
     source = path.resolve(strict=True)
     archive_format = detect_archive_format(source)
@@ -82,6 +83,8 @@ def inspect_container(path: Path, *, unrar: str = "unrar") -> ContainerInspectio
                 names = archive.namelist()
         except zipfile.BadZipFile as error:
             raise ConversionError(f"ZIP corrompido: {error}") from error
+    elif archive_format == "7z":
+        names = list_7z_entries(source, sevenzip=sevenzip)
     else:
         names = list_rar_entries(source, unrar=unrar)
     members = find_comic_entries(names)
@@ -95,6 +98,7 @@ def extract_container(
     destination_dir: Path,
     *,
     unrar: str = "unrar",
+    sevenzip: str = "7z",
 ) -> tuple[ExtractedComic, ...]:
     """Extrai cada quadrinho de forma atômica, sem sobrescrever nem alterar o contêiner."""
     destination = destination_dir.resolve(strict=True)
@@ -105,6 +109,11 @@ def extract_container(
                 if archive.getinfo(member).flag_bits & 0x1:
                     raise ConversionError(f"quadrinho protegido por senha no ZIP: {member}")
                 extracted.append(_extract_member(partial(archive.open, member), member, destination))
+    elif inspection.archive_format == "7z":
+        # Poucos quadrinhos por contêiner: ler cada um pelo stream evita extrair o pacote inteiro na origem.
+        for member in inspection.members:
+            opener = partial(open_7z_member, inspection.source, member, sevenzip=sevenzip)
+            extracted.append(_extract_member(opener, member, destination))
     else:
         for member in inspection.members:
             opener = partial(open_rar_member, inspection.source, member, unrar=unrar)
@@ -161,4 +170,4 @@ def _validate_comic(path: Path, member: str) -> None:
     try:
         detect_archive_format(path)
     except ConversionError as error:
-        raise ConversionError(f"o conteúdo de {member!r} não é ZIP nem RAR") from error
+        raise ConversionError(f"o conteúdo de {member!r} não é ZIP, RAR nem 7z") from error

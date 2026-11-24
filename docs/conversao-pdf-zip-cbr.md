@@ -48,14 +48,28 @@ A estrutura é detectada automaticamente:
   o comando `batch`;
 - conteúdo misto ou desconhecido: a conversão é rejeitada como ambígua.
 
+## Estratégia para 7-Zip (CB7)
+
+Há `.cbr` que na verdade são 7-Zip (assinatura `7z\xbc\xaf\x27\x1c`); o formato vem do cabeçalho, não da extensão.
+A leitura usa o executável `7z` (pacote `7zip`) e segue o mesmo contrato do RAR:
+
+- `7z t` testa a integridade e `7z l -slt` lista as entradas antes de qualquer escrita;
+- recusa entrada cifrada (campo `Encrypted`), cabeçalho cifrado e link simbólico (modo Unix `l...` em `Attributes`);
+  nomes absolutos ou com `..` são recusados por `plan_pages`;
+- uma senha falsa e fixa é sempre passada, para o `7z` falhar em vez de pedir senha no terminal;
+- as páginas são extraídas de uma vez numa pasta temporária isolada (estratégia `7z-normalized`). 7-Zip costuma ser
+  sólido: ler página a página descompactaria o bloco inteiro a cada página (medido: ~0,7 s por página num volume de
+  21 páginas, contra 0,7 s para extrair tudo);
+- num contêiner 7-Zip de quadrinhos, cada quadrinho é lido por stream (`7z e -so -spd`), sem curingas no nome.
+
 As páginas finais recebem nomes sequenciais como `000001.jpg`. Isso elimina colisões entre edições sem modificar os
 bytes das imagens.
 
 ## Contêineres de quadrinhos
 
-Antes de converter um ZIP ou RAR, o conteúdo é analisado. Se houver imagens, o arquivo é tratado como um quadrinho
-normal. Se houver `.cbr`, `.cbz` ou `.pdf`, ele é um contêiner: no lote, cada quadrinho é extraído para a mesma pasta
-do contêiner e depois convertido individualmente, gerando um `.cbr` por edição na biblioteca.
+Antes de converter um ZIP, RAR ou 7-Zip, o conteúdo é analisado. Se houver imagens, o arquivo é tratado como um
+quadrinho normal. Se houver `.cbr`, `.cbz` ou `.pdf`, ele é um contêiner: no lote, cada quadrinho é extraído para a
+mesma pasta do contêiner e depois convertido individualmente, gerando um `.cbr` por edição na biblioteca.
 
 Regras da extração:
 
@@ -76,7 +90,7 @@ Regras da extração:
 
 O modo em lote inspeciona, pelo conteúdo, os arquivos no primeiro nível da pasta e executa para cada entrada suportada:
 
-1. converte PDF, ZIP ou RAR para um CBR verdadeiro em RAR 5;
+1. converte PDF, ZIP, RAR ou 7-Zip para um CBR verdadeiro em RAR 5;
 2. coloca as páginas diretamente na raiz e valida ordem, quantidade e conteúdo;
 3. aplica OCR nas duas primeiras imagens e consulta o catálogo NDL quando encontra um ISBN válido;
 4. grava os metadados encontrados e publica a cópia validada em `~/banca`.
@@ -154,7 +168,7 @@ a saída; o relatório em arquivo continua sendo salvo normalmente nas execuçõ
 
 Antes de publicar a saída, a ferramenta:
 
-1. testa CRC do ZIP ou integridade do RAR;
+1. testa CRC do ZIP ou integridade do RAR ou do 7-Zip;
 2. rejeita caminhos absolutos e travessia por `..`;
 3. cria o RAR em diretório temporário no mesmo filesystem do destino;
 4. testa integralmente o RAR criado;

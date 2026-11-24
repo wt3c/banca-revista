@@ -17,6 +17,7 @@ RAR4_SIGNATURE = b"Rar!\x1a\x07\x00"
 RAR5_SIGNATURE = b"Rar!\x1a\x07\x01\x00"
 ZIP_SIGNATURES = (b"PK\x03\x04", b"PK\x05\x06", b"PK\x07\x08")
 PDF_SIGNATURE = b"%PDF-"
+SEVENZIP_SIGNATURE = b"7z\xbc\xaf\x27\x1c"
 IMAGE_EXTENSIONS = frozenset({".gif", ".jpeg", ".jpg", ".png", ".webp"})
 _NATURAL_PART = re.compile(r"(\d+)")
 
@@ -61,9 +62,11 @@ class ConversionResult:
 
 
 def detect_archive_format(path: Path) -> str:
-    """Detecta RAR ou ZIP pelo cabeçalho, sem confiar na extensão."""
+    """Detecta RAR, ZIP ou 7-Zip pelo cabeçalho, sem confiar na extensão."""
     with path.open("rb") as stream:
         signature = stream.read(max(len(RAR5_SIGNATURE), 4))
+    if signature.startswith(SEVENZIP_SIGNATURE):
+        return "7z"
     if signature.startswith((RAR4_SIGNATURE, RAR5_SIGNATURE)):
         return "rar"
     if signature.startswith(ZIP_SIGNATURES):
@@ -218,12 +221,14 @@ def _run_unrar(command: list[str]) -> subprocess.CompletedProcess[str]:
         raise ConversionError(f"falha ao ler o RAR: {detail}") from error
 
 
-class _UnrarMemberStream:
+class MemberStream:
+    """Página ou quadrinho lido do stdout de um extrator; o erro do processo só aparece no fechamento."""
+
     def __init__(self, process: subprocess.Popen[bytes], name: str) -> None:
         self.process = process
         self.name = name
         if process.stdout is None:
-            raise ConversionError("o unrar não disponibilizou a saída da página")
+            raise ConversionError(f"o extrator não disponibilizou a saída de {name!r}")
         self.stdout = process.stdout
 
     def __enter__(self) -> BinaryIO:
@@ -238,7 +243,7 @@ class _UnrarMemberStream:
             raise ConversionError(f"falha ao extrair {self.name!r}: {detail}")
 
 
-def open_rar_member(source: Path, name: str, *, unrar: str = "unrar") -> _UnrarMemberStream:
+def open_rar_member(source: Path, name: str, *, unrar: str = "unrar") -> MemberStream:
     """Abre um membro do RAR como stream sem extraí-lo para o filesystem."""
     try:
         process = subprocess.Popen(
@@ -248,4 +253,4 @@ def open_rar_member(source: Path, name: str, *, unrar: str = "unrar") -> _UnrarM
         )
     except FileNotFoundError as error:
         raise ConversionError("o executável unrar não foi encontrado") from error
-    return _UnrarMemberStream(process, name)
+    return MemberStream(process, name)
