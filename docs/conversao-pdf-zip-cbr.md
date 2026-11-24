@@ -2,8 +2,8 @@
 
 ## Objetivo
 
-A ferramenta converte PDFs e ZIPs em RAR 5 com extensão `.cbr`, sem alterar os arquivos originais; só a opção
-`--remove-originals` os retira da origem, enviando-os à Lixeira. A origem inicial desta etapa é:
+A ferramenta converte PDFs e ZIPs em RAR 5 com extensão `.cbr`, sem alterar os arquivos originais; na execução
+real (`--execute`) os originais publicados vão para a Lixeira, salvo com `--keep-originals`. A origem inicial é:
 
 ```text
 /home/boladuz/Downloads/Telegram Desktop
@@ -60,7 +60,7 @@ do contêiner e depois convertido individualmente, gerando um `.cbr` por ediçã
 Regras da extração:
 
 - a simulação não extrai nada; apenas lista o que seria extraído na fase `extract`;
-- o contêiner original nunca é alterado; só sai da origem com `--remove-originals` (veja abaixo);
+- o contêiner original nunca é alterado; só sai da origem para a Lixeira (veja abaixo);
 - cada arquivo é gravado em temporário oculto (`.banca-*.tmp`), validado pelo cabeçalho e publicado sem sobrescrita;
 - um arquivo homônimo com o mesmo SHA-256 é reaproveitado, o que torna a reexecução idempotente; com conteúdo
   diferente, o contêiner falha e o lote continua;
@@ -96,26 +96,32 @@ uv run banca-revista batch-to-cbr --execute
 
 Cada falha é isolada e registrada. Saídas existentes são marcadas como `skipped`; os itens seguintes continuam sendo
 processados. O primeiro relatório é `conversion-report.json`; lotes posteriores usam sufixos sequenciais sem
-sobrescrever o histórico. Sem `--remove-originals`, a pasta de origem permanece intacta: "mover" neste fluxo
-significa publicar a cópia processada em `~/banca` após as validações.
+sobrescrever o histórico. "Mover" neste fluxo significa publicar a cópia processada em `~/banca` após as
+validações e só então enviar o original à Lixeira; com `--keep-originals`, a pasta de origem permanece intacta.
 
 ### Remoção dos originais publicados
 
-Com `--remove-originals`, ao fim da execução os originais publicados com sucesso vão para a Lixeira do usuário
+Por padrão (desde 2026-11-23, a pedido do usuário), ao fim da execução real os originais publicados vão para a
+Lixeira do usuário
 (`$XDG_DATA_HOME/Trash`, especificação freedesktop.org), de onde podem ser restaurados pelo gerenciador de arquivos.
 Na origem ficam apenas os arquivos que exigem atenção.
 
-- Só itens `processed` nesta execução saem. `failed`, `unsupported` e `skipped` ficam: `skipped` é decidido pelo
-  nome da saída, não pelo conteúdo, e por isso não prova que aquele original está em `~/banca`.
+- Saem os itens `processed` nesta execução. `failed` e `unsupported` ficam.
+- Um item `skipped` (a saída já existia em `~/banca`) só sai se a saída for validada: RAR íntegro (`unrar t`) e com
+  a mesma quantidade de páginas que a conversão da origem produziria. O nome da saída sozinho não prova que aquele
+  original está publicado; se a validação falhar, o motivo fica no relatório (`não validada: ...`).
+  Sem remoção (`--keep-originals`), essa validação nem é feita.
 - Um contêiner sai só depois que todos os quadrinhos extraídos dele saíram; vale também para contêineres aninhados.
 - A remoção é feita por `link` + `unlink`, com o nome reservado pelo `.trashinfo`: nunca copia, nunca apaga em
   definitivo e nunca sobrescreve um item da Lixeira (nomes repetidos recebem sufixo `.2`, `.3`...).
 - Exige que a origem esteja na mesma partição da Lixeira. Se o envio falhar, o original fica, o item continua
   `processed` e o motivo aparece no relatório (`original mantido: ...`) e na tabela de originais mantidos.
-- A simulação nunca remove nada; com a opção, ela apenas informa que a remoção está ativa.
+- A simulação nunca remove nada; ela apenas informa que a remoção está ativa.
+- `--remove-originals` continua aceito por compatibilidade, mas é o comportamento padrão.
 
 ```bash
-uv run banca-revista batch-to-cbr --execute --remove-originals
+uv run banca-revista batch-to-cbr --execute                    # publica e envia os originais à Lixeira
+uv run banca-revista batch-to-cbr --execute --keep-originals   # publica e mantém a origem intacta
 ```
 
 Por padrão, até 10 arquivos percorrem seus pipelines completos em processos independentes. As etapas de um arquivo

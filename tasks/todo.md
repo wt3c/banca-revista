@@ -37,3 +37,16 @@ Decisões aprovadas: Lixeira (freedesktop.org), não exclusão definitiva; só i
 - [x] Atualizar `AGENTS.md` e `docs/conversao-pdf-zip-cbr.md`
 - [x] `pytest`, `ruff`, validação em cópias (10 na Lixeira, 6 PDFs com senha mantidos); simulação real
 - [x] Execução real com `--remove-originals`, 10 workers (10 publicados e na Lixeira; 6 PDFs com senha mantidos)
+
+## Ativa — remoção dos originais como padrão (2026-11-23)
+
+Relato: ao publicar em `~/banca` o original não saía de `Telegram Desktop`. Causa: a remoção dependia de
+`--remove-originals` (o último relatório tem `remove_originals: false`), e os 141 `skipped` nunca saíam.
+Decisão do usuário: `skipped` só sai se a saída existente for validada (RAR íntegro e mesma quantidade de páginas).
+
+- [x] Testes (TDD): padrão da CLI, `--keep-originals`, `skipped` validado sai e o divergente/corrompido fica
+- [x] `count_source_pages` em `cbr.py`, `_verify_existing_output` e `output_verified` em `batch.py`
+- [x] CLI: remoção padrão, `--keep-originals`; `--remove-originals` mantido por compatibilidade
+- [x] `AGENTS.md` e `docs/conversao-pdf-zip-cbr.md`
+- [x] Suíte completa (100 ok, 1 skip de rede, 2,97 s), ruff e simulação na origem real (12 planejados)
+- [x] Execução real, 10 workers: 21 originais na Lixeira (19 skipped validados); 3 com falha mantidos

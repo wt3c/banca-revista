@@ -146,6 +146,20 @@ def convert_to_cbr(
     )
 
 
+def count_source_pages(source: Path, *, unrar: str = "unrar", pdfinfo: str = "pdfinfo") -> int:
+    """Conta as páginas que ``convert_to_cbr`` publicaria, sem extrair nem escrever nada."""
+    input_format = detect_cbr_source(source)
+    if input_format == "pdf":
+        inspection = inspect_pdf(source, pdfinfo=pdfinfo)
+        if inspection.encrypted:
+            raise ConversionError("PDF protegido por senha não é suportado")
+        return inspection.page_count
+    if input_format == "zip":
+        with zipfile.ZipFile(source) as archive:
+            return len(classify_zip_entries(info.filename for info in archive.infolist()))
+    return len(inspect_rar(source, unrar=unrar, flatten=False).pages)
+
+
 def inspect_pdf(path: Path, *, pdfinfo: str = "pdfinfo", pdfimages: str = "pdfimages") -> PdfInspection:
     """Inspeciona PDF e decide se uma imagem JPEG integral existe por página."""
     _require_executable(pdfinfo)

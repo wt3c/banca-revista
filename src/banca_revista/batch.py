@@ -13,8 +13,8 @@ from pathlib import Path, PurePosixPath
 from queue import Empty
 from typing import Literal, Protocol
 
-from banca_revista.archive import ConversionError, natural_key
-from banca_revista.cbr import detect_cbr_source
+from banca_revista.archive import ConversionError, inspect_rar, natural_key
+from banca_revista.cbr import count_source_pages, detect_cbr_source
 from banca_revista.container import ContainerInspection, extract_container, inspect_container
 from banca_revista.metadata import ComicMetadata
 from banca_revista.pipeline import process_to_library
@@ -22,6 +22,7 @@ from banca_revista.trash import move_to_trash
 
 DEFAULT_WORKERS = 10
 KEPT_ORIGINAL_MARKER = "original mantido: "
+SKIPPED = "saída já existe"
 MAX_WORKERS = 64
 
 
@@ -37,6 +38,7 @@ class BatchItem:
     metadata: ComicMetadata | None = None
     source_removed: bool = False
     extracted: tuple[Path, ...] = ()
+    output_verified: bool = False
 
 
 @dataclass(frozen=True)
@@ -179,6 +181,7 @@ def run_batch(
                     item,
                     lookup_isbn=lookup_isbn,
                     replace_existing=replace_existing,
+                    verify_existing=remove_originals,
                 ): index
                 for index, item in pending
             }
@@ -217,7 +220,7 @@ def run_batch(
 
 
 def remove_published_originals(items: tuple[BatchItem, ...], trash_dir: Path | None = None) -> tuple[BatchItem, ...]:
-    """Envia à Lixeira só o que foi publicado nesta execução; o resto fica na origem para revisão.
+    """Envia à Lixeira o que foi publicado nesta execução ou já estava publicado e validado; o resto fica na origem.
 
     Um contêiner sai apenas quando todos os quadrinhos extraídos dele já saíram, inclusive contêineres aninhados.
     """
@@ -236,7 +239,7 @@ def remove_published_originals(items: tuple[BatchItem, ...], trash_dir: Path | N
         results[index] = replace(item, source_removed=True)
 
     for index, item in enumerate(results):
-        if item.status == "processed":
+        if item.status == "processed" or (item.status == "skipped" and item.output_verified):
             trash(index)
     containers = [index for index, item in enumerate(results) if item.status == "extracted"]
     while ready := [index for index in containers if set(results[index].extracted) <= removed]:
@@ -300,12 +303,13 @@ def _process_item(
     *,
     lookup_isbn: bool,
     replace_existing: bool,
+    verify_existing: bool = False,
 ) -> BatchItem:
     """Processa um item em subprocesso sem depender de estado mutável do pai."""
     worker_id = os.getpid()
     _put_progress_event(_WORKER_PROGRESS_QUEUE, BatchProgressEvent("started", item=item, worker_id=worker_id))
     if item.output.exists() and not replace_existing:
-        result = BatchItem(item.source, item.output, item.phase, "skipped", "saída já existe")
+        result = _verify_existing_output(item) if verify_existing else replace(item, status="skipped", detail=SKIPPED)
         _put_progress_event(_WORKER_PROGRESS_QUEUE, BatchProgressEvent("completed", item=result, worker_id=worker_id))
         return result
 
@@ -340,6 +344,19 @@ def _process_item(
     completed = BatchItem(item.source, item.output, item.phase, "processed", detail, result.metadata)
     _put_progress_event(_WORKER_PROGRESS_QUEUE, BatchProgressEvent("completed", item=completed, worker_id=worker_id))
     return completed
+
+
+def _verify_existing_output(item: BatchItem) -> BatchItem:
+    """Só considera publicada a saída íntegra com a mesma quantidade de páginas da origem."""
+    try:
+        published = len(inspect_rar(item.output).pages)
+        expected = count_source_pages(item.source)
+    except (ConversionError, OSError) as error:
+        return replace(item, status="skipped", detail=f"{SKIPPED}; não validada: {error}")
+    if published != expected:
+        detail = f"{SKIPPED}; não validada: saída tem {published} páginas, origem tem {expected}"
+        return replace(item, status="skipped", detail=detail)
+    return replace(item, status="skipped", detail=f"{SKIPPED}; validada: {published} páginas", output_verified=True)
 
 
 def _initialize_worker_progress(queue: ProgressQueue | None) -> None:

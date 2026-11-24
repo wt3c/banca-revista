@@ -376,3 +376,107 @@ def test_cli_dry_run_with_remove_originals_keeps_files(
     assert "Lixeira após publicação" in capsys.readouterr().out
     assert (tmp_path / "issue.pdf").exists()
     assert not output.exists()
+
+
+def test_remove_published_originals_trashes_skipped_only_when_output_verified(tmp_path: Path) -> None:
+    trash = tmp_path / "Trash"
+    out = tmp_path / "out"
+    items = (
+        BatchItem(_touch(tmp_path / "ok.cbz"), out / "ok.cbr", "convert", "skipped", output_verified=True),
+        BatchItem(_touch(tmp_path / "odd.cbz"), out / "odd.cbr", "convert", "skipped", "saída já existe"),
+    )
+
+    result = remove_published_originals(items, trash)
+
+    assert [(item.source.name, item.source_removed) for item in result] == [("ok.cbz", True), ("odd.cbz", False)]
+    assert sorted(path.name for path in tmp_path.iterdir() if path.is_file()) == ["odd.cbz"]
+
+
+@pytest.mark.skipif(
+    not all(shutil.which(tool) for tool in ("rar", "unrar", "tesseract", "magick")),
+    reason="ferramentas externas não instaladas",
+)
+def test_batch_trashes_skipped_original_only_when_existing_output_matches(tmp_path: Path) -> None:
+    base = tmp_path / "source"
+    base.mkdir()
+    for name, pages in (("same", 2), ("changed", 2)):
+        with zipfile.ZipFile(base / f"{name}.cbz", "w") as archive:
+            for page in range(1, pages + 1):
+                archive.writestr(f"{page:03}.jpg", f"\xff\xd8\xff{name}{page}".encode("latin-1"))
+    (base / "corrupt.cbz").write_bytes((base / "same.cbz").read_bytes())
+    output = tmp_path / "output"
+    trash = tmp_path / "Trash"
+    run_batch(base, output, dry_run=False, lookup_isbn=False, workers=2)
+    # Depois da primeira publicação, uma origem ganha página nova e a saída de outra é corrompida.
+    with zipfile.ZipFile(base / "changed.cbz", "a") as archive:
+        archive.writestr("003.jpg", b"\xff\xd8\xffextra")
+    (output / "corrupt.cbr").write_bytes(b"Rar!\x1a\x07\x01\x00quebrado")
+
+    report = run_batch(
+        base, output, dry_run=False, lookup_isbn=False, workers=2, remove_originals=True, trash_dir=trash
+    )
+
+    result = {item.source.name: item for item in report.items}
+    assert {name: (item.status, item.output_verified, item.source_removed) for name, item in result.items()} == {
+        "changed.cbz": ("skipped", False, False),
+        "corrupt.cbz": ("skipped", False, False),
+        "same.cbz": ("skipped", True, True),
+    }
+    assert "2 páginas, origem tem 3" in (result["changed.cbz"].detail or "")
+    assert "não validada" in (result["corrupt.cbz"].detail or "")
+    assert sorted(path.name for path in base.iterdir()) == ["changed.cbz", "corrupt.cbz"]
+
+
+def test_batch_without_removal_does_not_verify_skipped_outputs(tmp_path: Path) -> None:
+    base = tmp_path / "source"
+    base.mkdir()
+    with zipfile.ZipFile(base / "issue.cbz", "w") as archive:
+        archive.writestr("001.jpg", b"\xff\xd8\xffpage")
+    output = tmp_path / "output"
+    output.mkdir()
+    (output / "issue.cbr").write_bytes(b"old")
+
+    (item,) = run_batch(base, output, dry_run=False, lookup_isbn=False, workers=1).items
+
+    assert (item.status, item.detail, item.output_verified) == ("skipped", "saída já existe", False)
+
+
+def _run_cli(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], *args: str) -> str:
+    from banca_revista import cli
+
+    monkeypatch.setattr("sys.argv", ["banca-revista", "batch-to-cbr", *args])
+    assert cli.main() == 0
+    return capsys.readouterr().out
+
+
+def test_cli_execute_removes_originals_by_default(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    (tmp_path / "notes.txt").write_text("não é quadrinho")
+
+    out = _run_cli(monkeypatch, capsys, str(tmp_path), str(tmp_path / "output"), "--execute", "--json")
+
+    assert json.loads(out)["remove_originals"] is True
+    assert (tmp_path / "notes.txt").exists()
+
+
+def test_cli_keep_originals_disables_removal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    (tmp_path / "notes.txt").write_text("não é quadrinho")
+    output = tmp_path / "output"
+
+    out = _run_cli(monkeypatch, capsys, str(tmp_path), str(output), "--execute", "--json", "--keep-originals")
+
+    assert json.loads(out)["remove_originals"] is False
+
+
+def test_cli_dry_run_announces_default_removal_and_keeps_files(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    (tmp_path / "issue.pdf").write_bytes(b"%PDF-1.4")
+
+    out = _run_cli(monkeypatch, capsys, str(tmp_path), str(tmp_path / "output"))
+
+    assert "Lixeira após publicação" in out
+    assert (tmp_path / "issue.pdf").exists()

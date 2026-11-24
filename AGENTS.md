@@ -33,8 +33,9 @@
 - A origem inicial é `/home/boladuz/Downloads/Telegram Desktop` e deve ser tratada como somente leitura.
 - Exceção pedida pelo usuário: ZIP/RAR que contém `.cbr`, `.cbz` ou `.pdf` tem esses arquivos extraídos para a mesma
   pasta antes da conversão, de forma atômica e sem sobrescrever; veja `docs/conversao-pdf-zip-cbr.md`.
-- Exceção pedida pelo usuário: com `--remove-originals`, originais publicados com sucesso na execução vão para a
-  Lixeira (nunca exclusão definitiva); os demais ficam na origem.
+- Exceção pedida pelo usuário: na execução real, por padrão, originais publicados com sucesso (ou cuja saída já
+  existente foi validada) vão para a Lixeira (nunca exclusão definitiva); os demais ficam na origem.
+  `--keep-originals` desliga a remoção.
 - O arquivo piloto é `SIDOOH - Volume 01 [Packs de HQs].cbr`.
 - Nunca versione quadrinhos, páginas extraídas, arquivos temporários grandes ou dados pessoais do acervo.
 - Trabalhe em diretório temporário isolado e limpe-o apenas depois de fechar todos os arquivos.
